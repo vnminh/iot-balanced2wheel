@@ -1,0 +1,13 @@
+[Unit]
+Description=Robot VI-SLAM (ESP32 link + OpenVINS + web)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/iot-ck/pi
+ExecStart=%h/iot-ck/.venv/bin/python -m robot.main
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
