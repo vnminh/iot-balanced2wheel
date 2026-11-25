@@ -6,7 +6,7 @@
 #   bash esp32_flash_mode.sh restore   (GPIO14 -> TXD0)
 set -euo pipefail
 case "${1:-}" in
-  release) systemctl --user stop robotd 2>/dev/null || true; pinctrl set 14 ip pn ;;
+  release) systemctl --user stop robotd 2>/dev/null || true; pkill -f "[r]obot\.main" || true; pinctrl set 14 ip pn ;;
   restore) pinctrl set 14 a0 pn ;;
   *) echo "dùng: $0 release|restore"; exit 1 ;;
 esac

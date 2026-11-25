@@ -2,5 +2,8 @@
 __pycache__/
 *.pyc
 firmware/.pio/
-pi/vio/build/
-pi/vio/third_party/
+pi/slam/build/
+.build-slam/
+maps/
+logs/
+*.slamlog

@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-// Liên kết UART2 với Raspberry Pi.
+// Liên kết UART với Raspberry Pi (LINK_UART trong config.h).
 //
 // Pi -> ESP32: dòng text kết thúc '\n'
 //     VEL:<v>,<t>   v = tốc độ tiến (m/s, + = tới), t = chênh lệch mỗi bánh
@@ -13,14 +13,17 @@
 //
 // ESP32 -> Pi: khung nhị phân  A5 5A <type> <len> <payload...> <crc8>
 //   crc8 (đa thức 0x07, khởi tạo 0) tính trên type, len, payload.
-//   type 0x01 IMU (28 byte, little-endian):
+//   type 0x01 IMU (32 byte, little-endian):
 //       uint32 t_us        micros() lúc đọc xong MPU
 //       int16  acc[3]      thô, 8192 LSB/g  (khung cảm biến)
 //       int16  gyro[3]     thô đã trừ offset, 32.8 LSB/(deg/s)
 //       int32  steps[2]    tổng số bước trái, phải (+ = bánh lăn tới)
 //       uint8  state       0 hiệu chỉnh, 1 chờ dựng, 2 đang cân bằng
-//       uint8  flags       bit0 có lệnh từ Pi, bit1 động cơ đang bật
+//       uint8  flags       bit0 có lệnh từ Pi, bit1 động cơ đang bật,
+//                          bit2 bộ điều khiển chạm giới hạn (dễ trượt bước) từ mẫu trước
 //       uint16 seq
+//       float  pitch       rad, + = chúi tới: đúng góc vòng cân bằng đang dùng (SLAM bù nghiêng ảnh trần).
+//                          Thêm ở firmware 2.1; Pi vẫn nhận gói 28 byte cũ (tự tính pitch từ acc + gyro).
 //   type 0x02 TEXT: ACK:..., ST:READY|BALANCING|FALLEN|IMU_ERROR, INFO:..., PONG
 namespace Link {
 
@@ -34,8 +37,9 @@ struct __attribute__((packed)) ImuPacket {
   uint8_t state;
   uint8_t flags;
   uint16_t seq;
+  float pitch;
 };
-static_assert(sizeof(ImuPacket) == 28, "ImuPacket phai 28 byte");
+static_assert(sizeof(ImuPacket) == 32, "ImuPacket phai 32 byte");
 
 void begin();
 void poll();  // gọi mỗi vòng loop(); không bao giờ chặn
@@ -45,7 +49,7 @@ void update(float dt);
 float speed();     // m/s, + = tới
 float turn();      // m/s chênh lệch mỗi bánh, + = quay phải
 bool alive();      // còn nhận lệnh trong CMD_TIMEOUT_MS
-bool consumeTargetChanged();  // true một lần mỗi khi đích lệnh đổi
+bool consumeTargetChanged();  // true một lần mỗi khi đích tốc độ TIẾN/LÙI đổi (đổi lệnh quay thì không)
 void clear();      // dừng ngay (khi ngã / lỗi cảm biến)
 
 void sendImu(const ImuPacket &p);

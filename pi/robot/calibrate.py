@@ -4,9 +4,9 @@
   systemctl --user stop robotd      (giải phóng camera)
   cd ~/iot-ck/pi && ../.venv/bin/python -m robot.calibrate --square 0.025
 
-Cầm bàn cờ trước camera, nghiêng/xoay nhiều góc, phủ khắp khung hình (cả góc ảnh).
-Chương trình tự chụp khi thấy bàn cờ ở tư thế mới, đủ 25 ảnh thì in kết quả để
-dán vào config/kalibr_imucam_chain.yaml (intrinsics + distortion_coeffs).
+Camera hướng lên trần: cầm bàn cờ phía trên camera, nghiêng/xoay nhiều góc, phủ khắp khung hình
+(cả góc ảnh). Chương trình tự chụp khi thấy bàn cờ ở tư thế mới, đủ 25 ảnh thì in kết quả để
+dán vào config/slam.yaml (mục camera) rồi đặt calibrated.camera_intrinsics: true.
 """
 import argparse
 import time
@@ -54,11 +54,15 @@ def main() -> int:
     rms, K, D, _, _ = cv2.calibrateCamera(objs, imgs, (w, h), None, None, flags=cv2.CALIB_FIX_K3)
     D = D.ravel()
     print(f"\nRMS lỗi chiếu lại: {rms:.3f} px (tốt nếu < 0.5)")
-    print("Dán vào config/kalibr_imucam_chain.yaml:")
-    print(f"  distortion_coeffs: [{D[0]:.6f}, {D[1]:.6f}, {D[2]:.6f}, {D[3]:.6f}]")
-    print(f"  intrinsics: [{K[0,0]:.3f}, {K[1,1]:.3f}, {K[0,2]:.3f}, {K[1,2]:.3f}]")
-    print(f"  resolution: [{w}, {h}]")
-    print("Sau đó có thể đặt calib_cam_intrinsics: false trong estimator_config.yaml")
+    print("Dán vào config/slam.yaml, mục camera:")
+    print(f"  width: {w}")
+    print(f"  height: {h}")
+    print(f"  fx: {K[0,0]:.3f}")
+    print(f"  fy: {K[1,1]:.3f}")
+    print(f"  cx: {K[0,2]:.3f}")
+    print(f"  cy: {K[1,2]:.3f}")
+    print(f"  dist: [{D[0]:.6f}, {D[1]:.6f}, {D[2]:.6f}, {D[3]:.6f}, {D[4] if len(D) > 4 else 0.0:.6f}]")
+    print("rồi đặt calibrated.camera_intrinsics: true và khởi động lại robotd")
     return 0
 
 

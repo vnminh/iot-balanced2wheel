@@ -1,5 +1,5 @@
 [Unit]
-Description=Robot VI-SLAM (ESP32 link + OpenVINS + web)
+Description=Robot SLAM 2D (ESP32 link + slam_node + web)
 After=network-online.target
 
 [Service]

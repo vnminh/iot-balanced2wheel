@@ -1,9 +1,9 @@
-"""Chụp ảnh từ camera Pi (OV5647) bằng Picamera2, gắn mốc thời gian cho VIO.
+"""Chụp ảnh trần từ camera Pi (OV5647) bằng Picamera2, gắn mốc thời gian cho SLAM 2D.
 
 Mốc thời gian: SensorTimestamp của libcamera (đồng hồ CLOCK_MONOTONIC, ns) là lúc
 bắt đầu đọc dòng đầu tiên. Ta lấy thời điểm giữa phơi sáng của dòng GIỮA ảnh:
     t = ts - exposure/2 + readout/2
-Phần sai lệch còn lại do OpenVINS tự ước lượng (calib_cam_timeoffset).
+slam_node nội suy pose odometry và góc chúi đúng thời điểm này.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ class Camera:
         self.extra_shift_s = extra_shift_s
         self.on_frame = on_frame
         self.picam2 = None
+        self.restarts = 0
         self.latest_gray: Optional[np.ndarray] = None
         self.latest_t = 0.0
         self.frames = 0
@@ -49,7 +50,7 @@ class Camera:
         from libcamera import controls as lc
         frame_us = int(1e6 / self.fps)
         ctrl = {"FrameDurationLimits": (frame_us, frame_us)}
-        if self.exposure_us > 0:  # phơi sáng cố định: ảnh ổn định nhất cho VIO
+        if self.exposure_us > 0:  # phơi sáng cố định: ảnh ổn định nhất cho SLAM
             ctrl.update({"AeEnable": False, "ExposureTime": int(self.exposure_us), "AnalogueGain": float(self.gain)})
         else:  # tự động nhưng ưu tiên thời gian phơi sáng ngắn (ít nhoè khi xe lắc)
             ctrl.update({"AeEnable": True, "AeExposureMode": lc.AeExposureModeEnum.Short})
@@ -63,21 +64,53 @@ class Camera:
         cam.start()
         return cam
 
-    def _run(self) -> None:
+    FRAME_TIMEOUT_S = 2.0   # quá lâu không có ảnh = camera treo (vd. sụt áp) -> mở lại
+
+    def _close(self) -> None:
         try:
-            self.picam2 = self._open()
-        except Exception as e:  # không có camera / bị chương trình khác giữ
-            self.error = f"Không mở được camera: {e}"
-            print(self.error)
-            return
-        print(f"Camera: {self.w}x{self.h} @ {self.fps:g} fps (sensor {self.sensor_size})")
+            self.picam2.stop()
+        except Exception:
+            pass
+        try:
+            self.picam2.close()
+        except Exception:
+            pass
+        self.picam2 = None
+
+    def _run(self) -> None:
+        self.restarts = 0
         while not self._stop.is_set():
             try:
-                req = self.picam2.capture_request()
-            except Exception as e:
-                self.error = f"Lỗi camera: {e}"
-                time.sleep(0.5)
+                self.picam2 = self._open()
+            except Exception as e:  # không có camera / bị chương trình khác giữ / vừa treo
+                self.error = f"Không mở được camera: {e}"
+                print(self.error)
+                self.picam2 = None
+                self._stop.wait(2.0)
                 continue
+            self.error = None
+            print(f"Camera: {self.w}x{self.h} @ {self.fps:g} fps (sensor {self.sensor_size})")
+            self._capture_loop()
+            self._close()
+            if not self._stop.is_set():
+                self.restarts += 1
+                self._stop.wait(1.0)
+
+    def _capture_loop(self) -> None:
+        """Lấy ảnh tới khi dừng hoặc camera treo (trả về để mở lại)."""
+        while not self._stop.is_set():
+            try:
+                # Không chờ vô hạn: cảm biến treo do sụt nguồn thì capture_request() kẹt mãi
+                job = self.picam2.capture_request(wait=False)
+                req = self.picam2.wait(job, timeout=self.FRAME_TIMEOUT_S)
+            except TimeoutError:
+                self.error = f"Camera không ra ảnh {self.FRAME_TIMEOUT_S:g} s (sụt nguồn?), đang mở lại"
+                print(self.error)
+                return
+            except Exception as e:
+                self.error = f"Lỗi camera: {e}, đang mở lại"
+                print(self.error)
+                return
             try:
                 yuv = req.make_array("main")
                 md = req.get_metadata()
@@ -93,11 +126,6 @@ class Camera:
             self.latest_gray, self.latest_t = gray, t
             self.frames += 1
             self.meta = {"exposure_us": exp_us, "gain": round(md.get("AnalogueGain", 0.0), 2),
-                         "lux": round(md.get("Lux", 0.0), 1)}
+                         "lux": round(md.get("Lux", 0.0), 1), "restarts": self.restarts}
             if self.on_frame:
                 self.on_frame(t, gray)
-        try:
-            self.picam2.stop()
-            self.picam2.close()
-        except Exception:
-            pass

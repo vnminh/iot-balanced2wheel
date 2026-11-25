@@ -43,11 +43,11 @@ void sendFrame(uint8_t type, const void *payload, uint8_t len) {
 void setTarget(float v, float t) {
   v = clampf(v, -CMD_MAX_SPEED, CMD_MAX_SPEED);
   t = clampf(t, -CMD_MAX_TURN, CMD_MAX_TURN);
-  if (v != tgtSpeed || t != tgtTurn) {
-    tgtSpeed = v;
-    tgtTurn = t;
-    targetChanged = true;
-  }
+  // Chỉ báo đổi khi lệnh TIẾN/LÙI đổi: xoay tại chỗ (A/D) không được xoá điểm giữ
+  // vị trí, nếu không xe sẽ trôi mỗi lần bấm/thả phím xoay.
+  if (v != tgtSpeed) targetChanged = true;
+  tgtSpeed = v;
+  tgtTurn = t;
 }
 
 struct Named {

@@ -1,12 +1,12 @@
 #pragma once
 // =============================================================================
-//  XE CÂN BẰNG 2 BÁNH CHO VI-SLAM
+//  XE CÂN BẰNG 2 BÁNH CHO SLAM 2D (camera nhìn trần, pi/slam)
 //  ESP32 DevKit 38 chân + MPU-6050 + 2x A4988 + 2x Step 42 (bánh 65 mm)
 //
 //  ESP32 lo 3 việc:
 //   1. Giữ thăng bằng (PID tầng 400 Hz, giống bản cũ).
 //   2. Nhận lệnh vận tốc từ Raspberry Pi qua UART2.
-//   3. Gửi sang Pi luồng IMU + số bước 2 bánh 200 Hz (cho OpenVINS + odometry).
+//   3. Gửi sang Pi luồng IMU + số bước 2 bánh + góc chúi 200 Hz (odometry cho SLAM 2D).
 //
 //  Sửa thông số trong file này cho khớp với xe.
 // =============================================================================
@@ -52,7 +52,7 @@
 // ------------------------------- MPU-6050 -----------------------------------
 #define MPU_ADDR           0x68
 // MPU nằm ngang, mũi tên X chỉ về TRƯỚC xe, mặt linh kiện quay LÊN (Z lên)
-// => Y chỉ sang TRÁI. Khung này cũng là khung IMU mà OpenVINS dùng.
+// => Y chỉ sang TRÁI. Khung này cũng là khung IMU mà slam_node dùng (gyro quay quanh Z = quay xe).
 #define IMU_FWD_AXIS       0
 #define IMU_UP_AXIS        2
 #define IMU_GYRO_AXIS      1
@@ -68,11 +68,11 @@
 #define START_ANGLE_DEG    5.0f
 #define START_HOLD_MS      500
 
-// Vref đã vặn tối đa, động cơ hết rung -> trả về giới hạn thiết kế ban đầu.
-// Nếu thấy trượt bước khi bị đẩy mạnh: giảm MAX_ACCEL_MPS2 mỗi lần 0.5.
-// Vref tối đa làm A4988 rất nóng: BẮT BUỘC có tản nhiệt (tốt nhất thêm quạt).
-#define MAX_SPEED_MPS      0.90f
-#define MAX_ACCEL_MPS2     8.0f
+// Giá trị của bản Balanced2Wheels đã đứng vững. 0.90 / 8.0 làm động cơ trượt bước
+// (thiếu lực). Muốn tăng thì tăng dần MAX_ACCEL_MPS2 +0.5 / MAX_SPEED_MPS +0.05 mỗi lần.
+// Vref cao làm A4988 rất nóng: BẮT BUỘC có tản nhiệt (tốt nhất thêm quạt).
+#define MAX_SPEED_MPS      0.70f
+#define MAX_ACCEL_MPS2     6.0f
 #define MAX_TILT_TARGET    10.0f
 #define SPEED_FILTER_TAU   0.10f
 #define ACC_COMPENSATION   1
@@ -86,7 +86,7 @@
 
 // ------------------------- LỆNH CHẠY TỪ PI ----------------------------------
 // Giới hạn trên của lệnh VEL:<v>,<t> (Pi/web có thể gửi giá trị nhỏ hơn).
-// SLAM bằng camera cần chạy CHẬM: ảnh nhòe và rolling shutter làm mất bám.
+// SLAM bằng camera cần chạy CHẬM: ảnh trần nhoè khi chạy / quay nhanh.
 #define CMD_MAX_SPEED      0.35f    // m/s tiến/lùi
 #define CMD_MAX_TURN       0.20f    // m/s chênh lệch tốc độ mỗi bánh khi quay
 // Lệnh chữ (tương thích uart_link.py cũ / điều khiển giọng nói)
@@ -111,4 +111,4 @@
 // ------------------------------- SUY RA -------------------------------------
 #define STEPS_PER_REV      (MOTOR_FULL_STEPS * MICROSTEP)
 #define STEPS_PER_METER    (STEPS_PER_REV / (3.14159265f * WHEEL_DIAMETER_M))
-#define FW_VERSION         "iot-ck-2.0"
+#define FW_VERSION         "iot-ck-2.1"   // 2.1: gói IMU 32 byte (+ pitch)

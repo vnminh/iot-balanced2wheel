@@ -1,15 +1,15 @@
-"""Liên kết UART Raspberry Pi <-> ESP32 (firmware iot-ck-2.0).
+"""Liên kết UART Raspberry Pi <-> ESP32 (firmware iot-ck-2.x).
 
 ESP32 -> Pi: khung nhị phân  A5 5A <type> <len> <payload> <crc8>
   type 0x01: mẫu IMU + số bước 2 bánh (200 Hz), xem firmware/src/link.h
+             28 byte (firmware 2.0) hoặc 32 byte (2.1: thêm pitch float, rad, + = chúi tới)
   type 0x02: text (ST:..., ACK:..., LOG:..., HB:..., PONG)
 Pi -> ESP32: dòng text  VEL:<v>,<t>\\n  hoặc  CMD:<TÊN>\\n
 
 Đồng bộ đồng hồ: mỗi mẫu IMU mang micros() của ESP32. Ta quy về
 time.monotonic() của Pi (cùng đồng hồ với SensorTimestamp của libcamera) bằng
 bộ lọc "biên dưới": offset = min(t_nhận - t_esp) có cho phép trôi chậm lên trên.
-Độ trễ tối thiểu (truyền 33 byte) được cộng bù; phần còn lại OpenVINS tự ước
-lượng (calib_cam_timeoffset).
+Độ trễ tối thiểu (truyền một khung) được cộng bù.
 
 Chạy thử:  python3 -m robot.esp_link --port /dev/serial0
 """
@@ -28,7 +28,8 @@ import serial
 ACC_LSB_PER_G = 8192.0
 GYRO_LSB_PER_DPS = 32.8
 G = 9.80665
-IMU_FMT = struct.Struct("<I3h3h2iBBH")  # 28 byte
+IMU_FMT = struct.Struct("<I3h3h2iBBH")     # 28 byte, firmware 2.0
+IMU_FMT_P = struct.Struct("<I3h3h2iBBHf")  # 32 byte, firmware 2.1 (+ pitch)
 STATE_NAMES = {0: "CALIBRATING", 1: "WAITING", 2: "BALANCING"}
 
 
@@ -61,6 +62,7 @@ class ImuSample:
     state: int
     flags: int
     seq: int
+    pitch: Optional[float] = None   # rad, + = chúi tới (firmware 2.1); None = firmware cũ
 
 
 class ClockSync:
@@ -96,8 +98,8 @@ class EspLink:
         self.on_imu = on_imu
         self.on_text = on_text
         self.period = 1.0 / repeat_hz
-        # 33 byte * 10 bit / baud: thời gian tối thiểu để nhận xong một khung
-        self.sync = ClockSync(fixed_latency=33 * 10 / baud)
+        # 37 byte * 10 bit / baud: thời gian tối thiểu để nhận xong một khung IMU (32 byte + 5)
+        self.sync = ClockSync(fixed_latency=37 * 10 / baud)
         self._lock = threading.Lock()
         self._cmd = "VEL:0.000,0.000"
         self._stop = threading.Event()
@@ -157,14 +159,18 @@ class EspLink:
         return (self._wrap * 2**32 + t_us) * 1e-6
 
     def _handle_frame(self, ftype: int, payload: bytes, t_rx: float) -> None:
-        if ftype == 0x01 and len(payload) == IMU_FMT.size:
-            t_us, ax, ay, az, gx, gy, gz, sl, sr, state, flags, seq = IMU_FMT.unpack(payload)
+        if ftype == 0x01 and len(payload) in (IMU_FMT.size, IMU_FMT_P.size):
+            pitch = None
+            if len(payload) == IMU_FMT_P.size:
+                t_us, ax, ay, az, gx, gy, gz, sl, sr, state, flags, seq, pitch = IMU_FMT_P.unpack(payload)
+            else:
+                t_us, ax, ay, az, gx, gy, gz, sl, sr, state, flags, seq = IMU_FMT.unpack(payload)
             t_esp = self._unwrap(t_us)
             t = self.sync.update(t_esp, t_rx)
             ka = G / ACC_LSB_PER_G
             kg = math.radians(1.0 / GYRO_LSB_PER_DPS)
             s = ImuSample(t, t_esp, (ax * ka, ay * ka, az * ka), (gx * kg, gy * kg, gz * kg),
-                          (sl, sr), state, flags, seq)
+                          (sl, sr), state, flags, seq, pitch)
             if self._last_seq is not None:
                 lost = (seq - self._last_seq - 1) & 0xFFFF
                 if lost < 1000:
@@ -242,6 +248,7 @@ def main() -> int:
             print(f"imu={link.stats['imu']:5d} crc_err={link.stats['crc_err']} mất={link.stats['dropped_seq']} "
                   f"state={link.robot_state} acc=({s.acc[0]:+.2f},{s.acc[1]:+.2f},{s.acc[2]:+.2f}) "
                   f"gyro=({s.gyro[0]:+.3f},{s.gyro[1]:+.3f},{s.gyro[2]:+.3f}) steps={s.steps} "
+                  f"pitch={'-' if s.pitch is None else f'{math.degrees(s.pitch):+.1f}°'} "
                   f"lat={1000 * (time.monotonic() - s.t):.1f}ms")
         else:
             print("chưa nhận được mẫu IMU nào; stats:", link.stats)

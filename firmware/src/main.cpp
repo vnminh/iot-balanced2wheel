@@ -1,12 +1,12 @@
 // =============================================================================
-//  XE CÂN BẰNG 2 BÁNH CHO VI-SLAM - ESP32 + MPU-6050 + 2x A4988 + 2x Step 42
+//  XE CÂN BẰNG 2 BÁNH CHO SLAM 2D TRẦN NHÀ - ESP32 + MPU-6050 + 2x A4988 + 2x Step 42
 //
 //   lệnh Pi (VEL) ─► [làm mượt] ─► v_đặt ─► [PI tốc độ] ─► góc đặt ─► [PID góc] ─► gia tốc ─► ∫ ─► tốc độ bánh
 //                       └─► t (quay) ─────────────────────────────────────────── cộng vi sai ─┘
 //
-//  Mỗi 2 chu kỳ (200 Hz) gửi sang Pi: mẫu IMU thô + tổng số bước 2 bánh.
-//  Động cơ bước không trượt => số bước chính là quãng đường bánh đã lăn
-//  (so với thân xe), Pi dùng nó làm odometry bánh xe cho OpenVINS.
+//  Mỗi 2 chu kỳ (200 Hz) gửi sang Pi: mẫu IMU thô + tổng số bước 2 bánh + góc chúi.
+//  Số bước là số bước RA LỆNH (không encoder): Pi dùng làm odometry bánh xe cho SLAM 2D,
+//  còn trượt bước / kẹt bánh thì SLAM phát hiện bằng ảnh trần (pi/slam).
 //
 //  Vận hành:
 //   - Bật nguồn: ĐỂ XE NẰM YÊN ~2 s để hiệu chỉnh gyro (LED sáng).
@@ -38,6 +38,10 @@ uint32_t uprightSince = 0;
 uint16_t i2cErrors = 0;
 uint16_t telemSeq = 0;
 uint8_t telemDiv = 0;
+// Bộ điều khiển chạm giới hạn (gia tốc / tốc độ / tốc độ bước) kể từ lần gửi trước.
+// Lúc đó động cơ bước dễ TRƯỢT BƯỚC: số bước đã ra lệnh không còn đúng quãng đường bánh lăn,
+// Pi (slam_node) tăng nhiễu odometry bánh khi thấy cờ này.
+bool satLatch = false;
 
 constexpr float STEP_SPEED_LIMIT = MAX_STEP_RATE / STEPS_PER_METER;
 constexpr float SPEED_LIMIT = MAX_SPEED_MPS < STEP_SPEED_LIMIT ? MAX_SPEED_MPS : STEP_SPEED_LIMIT;
@@ -76,8 +80,10 @@ void sendTelemetry(uint32_t tUs) {
   p.steps[0] = Steppers::position(Steppers::LEFT);
   p.steps[1] = Steppers::position(Steppers::RIGHT);
   p.state = state;
-  p.flags = (Link::alive() ? 1 : 0) | (Steppers::isEnabled() ? 2 : 0);
+  p.flags = (Link::alive() ? 1 : 0) | (Steppers::isEnabled() ? 2 : 0) | (satLatch ? 4 : 0);
+  satLatch = false;
   p.seq = telemSeq++;
+  p.pitch = (angle - ANGLE_OFFSET_DEG) * DEG_TO_RAD;
   Link::sendImu(p);
 }
 
@@ -165,10 +171,12 @@ void controlStep(float dt) {
     angleInt = clampf(angleInt, -lim, lim);
   }
   float accel = ANGLE_KP * err + ANGLE_KI * angleInt + ANGLE_KD * gyroRate * DEG_TO_RAD;
+  if (fabsf(accel) >= MAX_ACCEL_MPS2) satLatch = true;
   accel = clampf(accel, -MAX_ACCEL_MPS2, MAX_ACCEL_MPS2);
 
   float prevSpeed = wheelSpeed;
   wheelSpeed = clampf(wheelSpeed + accel * dt, -SPEED_LIMIT, SPEED_LIMIT);
+  if (fabsf(wheelSpeed) >= SPEED_LIMIT) satLatch = true;
   wheelAccel = (wheelSpeed - prevSpeed) / dt;
 
   // Quay = vi sai cộng SAU vòng cân bằng (quay quanh trục đứng không ảnh
@@ -177,6 +185,7 @@ void controlStep(float dt) {
   float dps = cmdTurn * STEPS_PER_METER;
   const float peak = fabsf(sps) + fabsf(dps);
   if (peak > MAX_STEP_RATE) {
+    satLatch = true;
     const float k = MAX_STEP_RATE / peak;
     sps *= k;
     dps *= k;
@@ -211,7 +220,7 @@ void setup() {
   Steppers::begin();  // EN = HIGH -> động cơ tắt
   Link::begin();
   delay(300);
-  Link::log("%s: xe can bang + VI-SLAM | %.2f m/s, %.1f m/s2 | UART%d RX=%d TX=%d @%d | IMU %d Hz", FW_VERSION,
+  Link::log("%s: xe can bang + SLAM 2D | %.2f m/s, %.1f m/s2 | UART%d RX=%d TX=%d @%d | IMU %d Hz", FW_VERSION,
             SPEED_LIMIT, MAX_ACCEL_MPS2, LINK_UART, PIN_LINK_RX, PIN_LINK_TX, LINK_BAUD, LOOP_HZ / TELEM_DIV);
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);

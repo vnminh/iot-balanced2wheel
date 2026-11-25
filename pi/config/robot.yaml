@@ -1,32 +1,36 @@
-# Cấu hình robotd (pi/robot/main.py)
+# Cấu hình robotd (pi/robot/main.py). Thông số SLAM nằm ở slam.yaml.
 serial:
   port: /dev/serial0
   baud: 460800          # phải khớp LINK_BAUD trong firmware/include/config.h
 
-camera:
+camera:                 # OV5647 gắn HƯỚNG LÊN TRẦN (SLAM-DESIGN.md)
   enable: true
   width: 640
   height: 480
-  fps: 15               # 15 Hz: đủ cho VIO, để dành CPU cho OpenVINS trên Pi 4
+  fps: 15
   sensor_size: [1296, 972]   # OV5647 chế độ toàn khung (binning 2x2)
-  exposure_us: 12000    # cố định 12 ms (ít nhoè). 0 = tự động: phòng tối AE lên tới 66 ms, ảnh nhoè
-  gain: 8.0             # tăng nếu ảnh tối (tối đa ~16), chỉ dùng khi exposure_us > 0
+  exposure_us: 12000    # cố định 12 ms (ít nhoè khi xe chúi). 0 = tự động
+  gain: 8.0             # tăng nếu ảnh trần tối (tối đa ~16), chỉ dùng khi exposure_us > 0
   readout_s: 0.020      # thời gian đọc hết khung (rolling shutter) của chế độ trên
   extra_shift_s: 0.0
 
-vio:
+slam:
   enable: true
-  node: ../vio/build/ovw_node
-  estimator_config: ../config/estimator_config.yaml
-  wheel_config: ../config/wheel.yaml
-  voxel: 0.05           # m, lưới gộp điểm bản đồ
-  max_points: 200000
+  node: ../slam/build/slam_node     # pi/scripts/build_slam.sh
+  config: slam.yaml
+  shm: /dev/shm/slam                # grid.png / frame.jpg cho web (RAM, không ghi thẻ nhớ)
+  log_dir: ""                       # vd ../../logs: ghi toàn bộ dữ liệu vào để replay (~1 MB/s, thẻ nhớ đầy nhanh)
+  autoload: ""                      # mã bản đồ tự tải khi khởi động (trống = bắt đầu bản đồ mới)
+  autoload_mode: localization       # localization | mapping
 
-drive:                  # giới hạn lệnh từ web (firmware còn chặn thêm CMD_MAX_*)
+drive:                  # giới hạn lệnh (tay và goto); firmware còn chặn thêm CMD_MAX_*
   max_speed: 0.20       # m/s
-  max_turn: 0.10        # m/s chênh lệch mỗi bánh khi quay
-  timeout_s: 0.4        # web im lặng quá lâu -> dừng xe
+  max_turn: 0.10        # m/s chênh lệch mỗi bánh khi quay (goto: ω 1 rad/s = 0.085)
+  timeout_s: 0.4        # lâu không có lệnh mới -> dừng xe
 
 web:
   host: 0.0.0.0
   port: 8080
+
+maps:
+  dir: ../../maps       # = ~/iot-ck/maps (tương đối với thư mục config này)

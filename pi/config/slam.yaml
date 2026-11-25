@@ -1,0 +1,129 @@
+# Cấu hình SLAM 2D (pi/slam, SLAM-DESIGN.md mục 6). Đơn vị SI: m, rad, s (trừ tên có _deg).
+
+# Đánh dấu true khi đã đo / hiệu chỉnh thật: còn false thì web hiện cảnh báo
+calibrated:
+  wheel_base: false
+  camera_intrinsics: false
+  camera_mount: false      # đã chạy calib_ref / calib_measure, dấu trục đúng
+  ceiling_height: false    # chỉ cần khi camera.ceiling_height > 0
+
+robot:
+  wheel_diameter: 0.065    # m (firmware: WHEEL_DIAMETER_M)
+  wheel_base: 0.170        # m, TÂM BÁNH ĐẾN TÂM BÁNH: ĐO LẠI
+  steps_per_rev: 200       # firmware: MOTOR_FULL_STEPS
+  microsteps: 16           # firmware: MICROSTEP
+  body_radius: 0.10        # m, bán kính bao thân xe (rộng ~20 cm)
+
+ekf:
+  sigma_d_per_m: 0.02      # nhiễu quãng đường, σ² = k²·|d|
+  sigma_lat_per_m: 0.01
+  sigma_gyro: 0.01         # rad/s/√Hz
+  sigma_bias_rw: 0.0001    # bias gyro trôi rất chậm
+  init_sigma_bias: 0.02
+  sat_noise_mult: 5.0      # firmware báo chạm giới hạn (dễ trượt bước) -> nhiễu ×5
+  zupt_window: 1.0         # s xe không dời chỗ
+  zupt_disp: 0.005         # m: vị trí TB nửa đầu vs nửa sau cửa sổ, mỗi bánh (bánh vẫn đưa để cân bằng)
+  zupt_gyro: 0.03          # rad/s: |gyro TB| lớn hơn thì không coi là đứng yên
+  zupt_pitch_rate: 0.5     # rad/s
+  zupt_sigma: 0.003
+  use_wheel_omega: false   # tốc độ quay từ bánh làm phép đo bias gyro. CHỈ bật khi wheel_base đã đo chính xác:
+                           # sai wheel_base / hai bánh lệch tỉ lệ làm bias sai -> hướng trôi
+  wheel_omega_window: 0.1
+  wheel_omega_sigma: 0.15
+  pitch_filter_tau: 0.5    # chỉ dùng khi firmware cũ không gửi pitch
+
+camera:                    # OV5647 HƯỚNG LÊN TRẦN
+  width: 640               # độ phân giải lúc hiệu chỉnh (ảnh khác cỡ thì tự co giãn)
+  height: 480
+  fx: 635.0                # ƯỚC LƯỢNG: chạy python3 -m robot.calibrate rồi dán kết quả
+  fy: 635.0
+  cx: 320.0
+  cy: 240.0
+  dist: [0.0, 0.0, 0.0, 0.0, 0.0]   # k1 k2 p1 p2 k3
+  yaw_deg: 90              # trục x ảnh so với mũi xe. 90 = mép TRÊN ảnh hướng về MŨI xe
+  mount_roll_deg: 0        # camera gắn nghiêng (thân thẳng đứng)
+  mount_pitch_deg: 0
+  offset_x: 0.0            # m, camera so với tâm trục bánh (x tới, y trái)
+  offset_y: 0.0
+  height_above_axle: 0.15  # m, camera cao hơn trục bánh (bù dịch chuyển khi thân chúi)
+  ceiling_height: 0        # m từ camera tới trần; 0 = TỰ ƯỚC LƯỢNG từ odometry
+  max_pitch_deg: 8         # thân chúi hơn -> bỏ khung
+  max_pitch_rate: 1.5      # rad/s
+  max_yaw_rate: 1.5        # rad/s (ảnh nhoè khi quay nhanh)
+
+frontend:
+  orb_features: 500
+  orb_fast_threshold: 12   # trần ít hoa văn thì giảm (8)
+  min_features: 100        # keyframe cần tối thiểu
+  kf_min_dist: 0.30        # m
+  kf_min_angle_deg: 15
+  blind_kf_dist: 0.60      # m: đi xa vậy mà vẫn không đủ đặc trưng -> keyframe "mù" (chỉ odometry)
+  path_sample: 0.02        # m, lấy mẫu quỹ đạo cho grid
+  debug_jpg_period: 0.5    # s, ảnh đặc trưng cho web
+
+loop:
+  search_radius: 1.0       # m
+  min_kf_gap: 20
+  neighbor_edges: 3        # so với 3 keyframe ngay trước (odometry thị giác, bắt bánh kẹt)
+  max_candidates: 3
+  ratio_test: 0.7
+  ransac_px: 3.0
+  min_inliers: 30
+  scale_range: [0.95, 1.05]
+  max_pred_dist: 0.5       # m, loop lệch dự đoán hơn -> bỏ
+  max_pred_angle_deg: 20
+  neighbor_max_dist: 1.0   # rộng: odometry stepper có thể sai nhiều khi kẹt / trượt bước
+  neighbor_max_angle_deg: 30
+  sigma_xy: 0.03           # m, nhiễu cạnh thị giác (ở min_inliers)
+  sigma_th_deg: 1.5
+  huber_k: 1.345
+  reloc_period: 0.5        # s giữa hai lần thử tái định vị
+  reloc_confirm: 2         # số lần khớp nhất quán liên tiếp
+  reloc_agree_dist: 0.2
+  reloc_agree_angle_deg: 10
+  reloc_timeout: 4.0
+  loc_period: 0.5          # s, chế độ localization: so với bản đồ
+  loc_min_move: 0.10
+
+localization:
+  max_map_sigma: 0.30      # m: bất định hơn -> mất định vị, không cho goto
+  drift_per_m: 0.05
+  drift_th_per_m_deg: 2.0
+  chi2_gate: 11.34
+
+grid:
+  resolution: 0.05
+  center_tolerance: 0.05
+  margin: 0.5
+
+planner:
+  edge_weight: 2.0
+  waypoint_spacing: 0.15
+  max_snap: 1.0            # m: đích xa vùng đã đi hơn thì từ chối
+
+controller:
+  rate_hz: 20
+  v_max: 0.15              # m/s (firmware còn chặn CMD_MAX_SPEED 0.35)
+  v_min: 0.03
+  w_max: 1.0               # rad/s (= 0.085 m/s chênh lệch mỗi bánh, firmware chặn 0.20)
+  w_min_rotate: 0.25
+  acc_v: 0.3
+  acc_w: 2.0
+  lookahead: 0.30
+  goal_tol_xy: 0.10
+  goal_tol_theta_deg: 10
+  rotate_in_place_deg: 50
+  rotate_exit_deg: 15
+  k_rot: 1.5
+  k_v_goal: 0.8
+  stuck_time: 8.0
+  progress_min: 0.05
+  mcu_timeout: 0.2
+  max_pitch_deg: 20
+  max_pitch_rate: 3.0
+
+quality:                   # điều kiện để nút "Lưu bản đồ" bật (vẫn có "Lưu dù chưa đạt")
+  min_keyframes: 10
+  min_visual_ratio: 0.6
+  min_neighbor_ratio: 0.5
+  min_loops: 1
