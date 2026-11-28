@@ -3,6 +3,8 @@
 //
 //   bản ghi = <type u8> <len u32 LE> <payload len byte>
 //   'M' mẫu MCU   : McuRecord (52 byte, little-endian, packed)
+//   'S' siêu âm   : SonarRecord (11 byte: f64 t, u8 idx, u16 mm), xem slam/sonar.h
+//   'G' vị trí cảm biến siêu âm: nguyên khung SONAR_GEOM của ESP32 (firmware 2.2)
 //   'I' ảnh xám   : f64 t, u16 w, u16 h, w*h byte
 //   'J' ảnh JPEG  : f64 t, dữ liệu JPEG (log ghi ảnh dạng này cho nhỏ)
 //   'C' lệnh text : UTF-8, một dòng (xem SlamSystem::command)

@@ -15,6 +15,7 @@ namespace {
 float tgtSpeed = 0, tgtTurn = 0;  // đích nhận từ Pi
 float curSpeed = 0, curTurn = 0;  // đã làm mượt
 bool targetChanged = false;
+bool infoRequested = false;
 bool everRx = false;
 uint32_t lastRx = 0;
 
@@ -28,7 +29,7 @@ uint8_t crc8(const uint8_t *d, size_t n, uint8_t crc = 0) {
   return crc;
 }
 
-void sendFrame(uint8_t type, const void *payload, uint8_t len) {
+void sendFrameImpl(uint8_t type, const void *payload, uint8_t len) {
   uint8_t buf[4 + 255 + 1];
   buf[0] = 0xA5;
   buf[1] = 0x5A;
@@ -95,6 +96,7 @@ void handleLine(char *line) {
   } else if (strcmp(line, "INFO") == 0) {
     Link::sendText("INFO:fw=%s steps_per_m=%.3f wheel_d=%.4f acc_lsb_g=8192 gyro_lsb_dps=32.8 rate=%d",
                    FW_VERSION, (double)STEPS_PER_METER, (double)WHEEL_DIAMETER_M, LOOP_HZ / TELEM_DIV);
+    infoRequested = true;
     ok = true;
   }
   if (ok) {
@@ -163,7 +165,14 @@ void clear() {
   curTurn = 0;
 }
 
-void sendImu(const ImuPacket &p) { sendFrame(T_IMU, &p, sizeof(p)); }
+void sendFrame(uint8_t type, const void *payload, uint8_t len) { sendFrameImpl(type, payload, len); }
+void sendImu(const ImuPacket &p) { sendFrameImpl(T_IMU, &p, sizeof(p)); }
+
+bool consumeInfoRequest() {
+  bool r = infoRequested;
+  infoRequested = false;
+  return r;
+}
 
 void sendText(const char *fmt, ...) {
   char s[160];
@@ -173,7 +182,7 @@ void sendText(const char *fmt, ...) {
   va_end(ap);
   if (n < 0) return;
   if (n > (int)sizeof(s) - 1) n = sizeof(s) - 1;
-  sendFrame(T_TEXT, s, (uint8_t)n);
+  sendFrameImpl(T_TEXT, s, (uint8_t)n);
 #if LINK_UART != 0
   Serial.println(s);  // cổng USB rảnh -> in thêm để debug
 #endif

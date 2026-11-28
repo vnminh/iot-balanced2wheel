@@ -22,6 +22,7 @@ import numpy as np
 
 MCU_STRUCT = struct.Struct("<dIHii3f3ffBB")   # 52 byte, khớp McuRecord
 IMG_HDR = struct.Struct("<dHH")
+SONAR_STRUCT = struct.Struct("<dBH")              # 11 byte, khớp SonarRecord (bản ghi 'S')
 assert MCU_STRUCT.size == 52
 
 
@@ -114,6 +115,16 @@ class SlamBridge:
         h, w = gray.shape
         self._put(_rec(b"I", IMG_HDR.pack(t, w, h) + np.ascontiguousarray(gray).tobytes()))
         self.stats["img_sent"] += 1
+
+    def push_sonar(self, s) -> None:
+        """s = esp_link.SonarSample"""
+        if self.status == "running":
+            self._put(_rec(b"S", SONAR_STRUCT.pack(s.t, s.idx & 0xFF, s.mm & 0xFFFF)))
+
+    def push_sonar_geom(self, raw: bytes) -> None:
+        """Nguyên khung SONAR_GEOM do ESP32 gửi (bản ghi 'G')."""
+        if self.status == "running":
+            self._put(_rec(b"G", bytes(raw)))
 
     def push_raw(self, kind: bytes, payload: bytes) -> None:
         """Bản ghi đọc từ file log (robotd --replay)."""

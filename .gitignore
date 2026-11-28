@@ -7,3 +7,7 @@ pi/slam/build/
 maps/
 logs/
 *.slamlog
+Speech-control/models/
+firmware-mic/.pio/
+firmware-mic/include/secrets.h
+.build-slam2/

@@ -24,10 +24,31 @@
 //       uint16 seq
 //       float  pitch       rad, + = chúi tới: đúng góc vòng cân bằng đang dùng (SLAM bù nghiêng ảnh trần).
 //                          Thêm ở firmware 2.1; Pi vẫn nhận gói 28 byte cũ (tự tính pitch từ acc + gyro).
-//   type 0x02 TEXT: ACK:..., ST:READY|BALANCING|FALLEN|IMU_ERROR, INFO:..., PONG
+//   type 0x02 TEXT: ACK:..., ST:READY|BALANCING|FALLEN|IMU_ERROR, INFO:..., SONAR:STOP|CLEAR, PONG
+//   type 0x03 SONAR (7 byte, firmware 2.2): một số đo vừa xong
+//       uint32 t_us        micros() lúc ECHO kết thúc
+//       uint8  idx         chỉ số cảm biến (thứ tự trong SONAR_SENSORS)
+//       uint16 mm          khoảng cách; 0 = không có vang trong tầm, 0xFFFF = cảm biến lỗi (ECHO không lên)
+//   type 0x04 SONAR_GEOM (4 + 9·n byte): bảng vị trí cảm biến, gửi lúc khởi động, mỗi 2 s và khi nhận INFO
+//       uint8 version (=1) · uint8 count · uint16 max_range_mm
+//       count lần: int16 x_mm · int16 y_mm · int16 yaw_cdeg (0,01°, + = trái) · uint8 half_deg · uint16 stop_mm
 namespace Link {
 
-enum : uint8_t { T_IMU = 0x01, T_TEXT = 0x02 };
+enum : uint8_t { T_IMU = 0x01, T_TEXT = 0x02, T_SONAR = 0x03, T_SONAR_GEOM = 0x04 };
+
+struct __attribute__((packed)) SonarReading {
+  uint32_t t_us;
+  uint8_t idx;
+  uint16_t mm;
+};
+static_assert(sizeof(SonarReading) == 7, "SonarReading phai 7 byte");
+
+struct __attribute__((packed)) SonarGeomItem {
+  int16_t x_mm, y_mm, yaw_cdeg;
+  uint8_t half_deg;
+  uint16_t stop_mm;
+};
+static_assert(sizeof(SonarGeomItem) == 9, "SonarGeomItem phai 9 byte");
 
 struct __attribute__((packed)) ImuPacket {
   uint32_t t_us;
@@ -53,6 +74,8 @@ bool consumeTargetChanged();  // true một lần mỗi khi đích tốc độ T
 void clear();      // dừng ngay (khi ngã / lỗi cảm biến)
 
 void sendImu(const ImuPacket &p);
+void sendFrame(uint8_t type, const void *payload, uint8_t len);
+bool consumeInfoRequest();   // Pi vừa gửi INFO (gửi lại bảng vị trí siêu âm)
 void sendText(const char *fmt, ...);
 // Log debug: gửi khung TEXT "LOG:..." (và in ra USB nếu USB không dùng cho Pi)
 void log(const char *fmt, ...);

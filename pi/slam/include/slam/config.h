@@ -119,6 +119,41 @@ struct ControllerCfg {
   double mcu_timeout = 0.2;
   double max_pitch_deg = 20;
   double max_pitch_rate = 3.0;
+  // Vật cản (siêu âm): giảm tốc theo khoảng trống phía trước, bị chặn -> quét, chờ, chạy lại A*
+  double stop_dist = 0.15;         // m khoảng trống: v = 0 khi tiến
+  double slow_dist = 0.50;         // m: bắt đầu giảm tốc
+  double hold_block_s = 1.0;       // siêu âm giữ xe đứng lâu hơn -> coi như bị chặn
+  double scan_deg = 25;            // quét ±góc tại chỗ khi bị chặn (log-odds thấy rõ vật lệch bên nào)
+  double block_wait_s = 3.0;       // chờ vật tạm tự đi trước khi tìm đường khác
+  double replan_retry_s = 2.0;
+  double max_block_s = 30.0;       // không có đường lâu hơn -> huỷ
+  double look_pause_s = 0.3;       // dừng sau khi xoay tại chỗ để siêu âm đo hướng mới
+};
+
+// Xử lý siêu âm (vị trí cảm biến DO ESP32 GỬI, không cấu hình ở đây)
+struct SonarCfg {
+  bool enable = true;
+  double max_pitch_deg = 8;        // thân chúi hơn -> chùm có thể quét sàn: bỏ số đo
+  double gate_move = 0.03;         // m: chỉ cập nhật lưới khi cảm biến đã dời...
+  double gate_turn_deg = 3;        // ... hoặc xoay từ lần cập nhật trước (số đo đứng yên không độc lập)
+  double fresh_s = 0.5;            // số đo cũ hơn không dùng cho khoảng trống phía trước
+  double corridor = 0.15;          // m nửa bề rộng hành lang thân xe (thân 0,10 + dự phòng)
+};
+
+// Bản đồ vật cản log-odds (kiểu EGO-Planner)
+struct ObstacleCfg {
+  double resolution = 0.05;
+  double p_hit = 0.65, p_miss = 0.35, p_min = 0.12, p_max = 0.90, p_occ = 0.80;
+  double edge_weight = 0.5;        // trọng số "trúng" ở mép chùm (1 ở trục)
+  int rays = 7;
+  double hit_range = 1.2;          // m: chỉ ghi "trúng" khi d ≤ đây (xa hơn cung quá rộng, chỉ dùng để xoá trống)
+  double no_echo_free = 1.2;       // m: "không có vang" chỉ xoá trống tới đây
+  double temp_tau = 25.0;          // s: lớp tạm quên dần
+  double temp_window = 3.0;        // m nửa cạnh cửa sổ lớp tạm quanh xe
+  bool static_layer = true;        // ghi lớp tĩnh khi tạo / mở rộng bản đồ
+  double inflate = 0.15;           // m phình ô vật cản (thân 0,10 + dự phòng)
+  double check_ahead = 1.0;        // m đường phía trước để kiểm tra bị chặn
+  double replan_start_snap = 0.30; // m: điểm đầu khi lập lại đường được dời tối đa
 };
 
 struct QualityCfg {
@@ -138,6 +173,8 @@ struct Config {
   GridCfg grid;
   PlannerCfg planner;
   ControllerCfg controller;
+  SonarCfg sonar;
+  ObstacleCfg obstacles;
   QualityCfg quality;
   std::vector<std::string> warnings;  // giá trị TBD đang dùng mặc định
   std::string source_text;            // nội dung file (lưu vào config_snapshot.yaml)

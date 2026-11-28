@@ -43,7 +43,7 @@ def cmd_info(path):
     cnt, t0, t1, cmds = {}, None, None, []
     for k, d in records(path):
         cnt[k] = cnt.get(k, 0) + 1
-        if k in "MIJ" and len(d) >= 8:
+        if k in "MIJS" and len(d) >= 8:
             t = struct.unpack("<d", d[:8])[0]
             t0 = t if t0 is None else t0
             t1 = t
@@ -51,7 +51,8 @@ def cmd_info(path):
             cmds.append(d.decode("utf-8", "replace"))
     dur = (t1 - t0) if t0 is not None else 0
     print(f"{path}: {dur:.1f} s, MCU {cnt.get('M', 0)} ({cnt.get('M', 0) / max(dur, 1e-9):.0f} Hz), "
-          f"ảnh {cnt.get('I', 0) + cnt.get('J', 0)}, lệnh {len(cmds)}")
+          f"ảnh {cnt.get('I', 0) + cnt.get('J', 0)}, siêu âm {cnt.get('S', 0)} số đo / {cnt.get('G', 0)} bảng vị trí, "
+          f"lệnh {len(cmds)}")
     for c in cmds[:30]:
         print("  lệnh:", c)
 

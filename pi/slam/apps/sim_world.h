@@ -1,6 +1,8 @@
 #pragma once
 // Thế giới giả lập cho test tích hợp (SLAM-DESIGN.md mục 9): trần nhà có hoa văn, xe cân bằng chúi tới lui,
 // bánh có sai số tỉ lệ (odometry trôi), gyro có bias, có thể làm bánh "kẹt" (bánh báo quay mà xe đứng yên).
+#include <array>
+#include <functional>
 #include <opencv2/core.hpp>
 #include <random>
 #include <utility>
@@ -16,6 +18,12 @@
 
 namespace sim {
 
+// Hộp chắn (vật cản cho siêu âm), có thời gian xuất hiện / biến mất
+struct SimBox {
+  double x0, y0, x1, y1;
+  double t_on = -1e18, t_off = 1e18;
+};
+
 struct SimParams {
   double ceiling_h = 2.30;       // m, trần so với camera
   double tex_res = 0.005;        // m / pixel kết cấu trần
@@ -30,6 +38,11 @@ struct SimParams {
   unsigned seed = 1;             // nhiễu
   unsigned tex_seed = 1;         // hoa văn trần (giữ nguyên giữa các pha = cùng một căn phòng)
   std::vector<std::pair<double, double>> stuck;     // khoảng thời gian bánh kẹt (xe đứng yên, bánh báo chạy)
+  // Siêu âm giả lập: đóng vai ESP32 (bảng vị trí gửi bằng bản ghi 'G', giống SONAR_SENSORS mặc định)
+  bool sonar = true;
+  std::vector<std::array<double, 4>> sonar_mount = {{0.08, 0.05, 40, 15}, {0.09, 0.0, 0, 15}, {0.08, -0.05, -40, 15}};
+  double sonar_range = 2.0, sonar_period = 0.022, sonar_noise = 0.005;
+  std::vector<SimBox> boxes;
 };
 
 class SimWorld {
@@ -45,6 +58,12 @@ public:
   slam::Pose2 truth() const { return truth_; }
   double pitch() const { return pitch_; }
   void teleport(const slam::Pose2 &p) { truth_ = p; }
+  void addBox(const SimBox &b) { p_.boxes.push_back(b); }
+  std::vector<SimBox> &boxes() { return p_.boxes; }
+  const SimParams &params() const { return p_; }
+  // Khoảng cách tới vật gần nhất trong chùm cảm biến k (m); < 0 = không có vang
+  double sonarRange(int k) const;
+  std::vector<uint8_t> sonarGeomBytes() const;   // khung SONAR_GEOM như firmware 2.2
 
 private:
   slam::Config cfg_;
@@ -73,13 +92,17 @@ public:
   void forward(double dist, double v = 0.12);    // "người lái": đo bằng vị trí thật
   void rotate(double angle, double w = 0.5);
   void command(const std::string &c);
-  bool navigate(double timeout);                 // lái theo lệnh của controller tới khi xong; true = tới nơi
+  bool navigate(double timeout, const std::function<void()> &each = nullptr);   // lái theo controller; true = tới nơi
   bool waitLocalized(double timeout, double w_rotate = 0.3);
   slam::Pose2 truthAt(double t) const;          // vị trí thật tại thời điểm t (để chấm điểm)
   double minDist(const Eigen::Vector2d &p, double t0, double t1) const;   // xe thật đi gần p nhất bao nhiêu
 
 private:
+  void sonarTick();
   std::vector<std::pair<double, slam::Pose2>> hist_;
+  double next_sonar_ = -1e9;
+  int sonar_k_ = 0;
+  bool geom_sent_ = false;
   slam::SlamSystem &sys_;
   SimWorld &w_;
   FILE *log_;

@@ -3,7 +3,10 @@
 ESP32 -> Pi: khung nhị phân  A5 5A <type> <len> <payload> <crc8>
   type 0x01: mẫu IMU + số bước 2 bánh (200 Hz), xem firmware/src/link.h
              28 byte (firmware 2.0) hoặc 32 byte (2.1: thêm pitch float, rad, + = chúi tới)
-  type 0x02: text (ST:..., ACK:..., LOG:..., HB:..., PONG)
+  type 0x02: text (ST:..., ACK:..., LOG:..., HB:..., SONAR:STOP|CLEAR, PONG)
+  type 0x03: một số đo siêu âm (firmware 2.2): u32 t_us, u8 idx, u16 mm (0 = không vang, 0xFFFF = lỗi)
+  type 0x04: bảng vị trí cảm biến siêu âm (firmware 2.2), xem robot/sonar.py. Pi KHÔNG có cấu hình vị trí
+             cảm biến: dùng đúng bảng ESP32 gửi.
 Pi -> ESP32: dòng text  VEL:<v>,<t>\\n  hoặc  CMD:<TÊN>\\n
 
 Đồng bộ đồng hồ: mỗi mẫu IMU mang micros() của ESP32. Ta quy về
@@ -30,6 +33,7 @@ GYRO_LSB_PER_DPS = 32.8
 G = 9.80665
 IMU_FMT = struct.Struct("<I3h3h2iBBH")     # 28 byte, firmware 2.0
 IMU_FMT_P = struct.Struct("<I3h3h2iBBHf")  # 32 byte, firmware 2.1 (+ pitch)
+SONAR_FMT = struct.Struct("<IBH")          # 7 byte, firmware 2.2
 STATE_NAMES = {0: "CALIBRATING", 1: "WAITING", 2: "BALANCING"}
 
 
@@ -65,6 +69,14 @@ class ImuSample:
     pitch: Optional[float] = None   # rad, + = chúi tới (firmware 2.1); None = firmware cũ
 
 
+@dataclass
+class SonarSample:
+    t: float               # giây, đồng hồ Pi (lúc ECHO kết thúc)
+    t_esp: float
+    idx: int               # chỉ số cảm biến (theo bảng của ESP32)
+    mm: int                # 0 = không có vang trong tầm, 0xFFFF = cảm biến lỗi
+
+
 class ClockSync:
     """Quy đổi đồng hồ ESP32 sang đồng hồ Pi bằng biên dưới của độ trễ."""
 
@@ -92,11 +104,16 @@ class EspLink:
     def __init__(self, port: str = "/dev/serial0", baud: int = 460800,
                  on_imu: Optional[Callable[[ImuSample], None]] = None,
                  on_text: Optional[Callable[[str], None]] = None,
+                 on_sonar: Optional[Callable[[SonarSample], None]] = None,
+                 on_sonar_geom: Optional[Callable[[bytes], None]] = None,
                  repeat_hz: float = 10.0):
         self.ser = serial.Serial(port, baud, timeout=0.02)
         self.baud = baud
         self.on_imu = on_imu
         self.on_text = on_text
+        self.on_sonar = on_sonar
+        self.on_sonar_geom = on_sonar_geom
+        self.sonar_geom_raw: Optional[bytes] = None   # khung SONAR_GEOM gần nhất (robot/sonar.py đọc)
         self.period = 1.0 / repeat_hz
         # 37 byte * 10 bit / baud: thời gian tối thiểu để nhận xong một khung IMU (32 byte + 5)
         self.sync = ClockSync(fixed_latency=37 * 10 / baud)
@@ -107,7 +124,7 @@ class EspLink:
         self._last_us = None
         self.last_imu: Optional[ImuSample] = None
         self.robot_state = "UNKNOWN"
-        self.stats = {"imu": 0, "crc_err": 0, "text": 0, "dropped_seq": 0}
+        self.stats = {"imu": 0, "crc_err": 0, "text": 0, "dropped_seq": 0, "sonar": 0}
         self._last_seq = None
         self._threads = [threading.Thread(target=self._rx_loop, name="esp-rx", daemon=True),
                          threading.Thread(target=self._tx_loop, name="esp-tx", daemon=True)]
@@ -158,6 +175,15 @@ class EspLink:
         self._last_us = t_us
         return (self._wrap * 2**32 + t_us) * 1e-6
 
+    def _unwrap_peek(self, t_us: int) -> float:
+        """Như _unwrap nhưng không cập nhật trạng thái (số đo siêu âm có thể cũ hơn mẫu IMU vừa nhận)."""
+        wrap = self._wrap
+        if self._last_us is not None and t_us > self._last_us and t_us - self._last_us > 2**31:
+            wrap -= 1   # mốc trước lần tràn
+        elif self._last_us is not None and t_us < self._last_us and self._last_us - t_us > 2**31:
+            wrap += 1
+        return (wrap * 2**32 + t_us) * 1e-6
+
     def _handle_frame(self, ftype: int, payload: bytes, t_rx: float) -> None:
         if ftype == 0x01 and len(payload) in (IMU_FMT.size, IMU_FMT_P.size):
             pitch = None
@@ -181,6 +207,18 @@ class EspLink:
             self.robot_state = STATE_NAMES.get(state, str(state))
             if self.on_imu:
                 self.on_imu(s)
+        elif ftype == 0x03 and len(payload) == SONAR_FMT.size:
+            t_us, idx, mm = SONAR_FMT.unpack(payload)
+            t_esp = self._unwrap_peek(t_us)
+            off = self.sync.offset if self.sync.offset is not None else t_rx - t_esp
+            ss = SonarSample(t_esp + off - self.sync.fixed_latency, t_esp, idx, mm)
+            self.stats["sonar"] += 1
+            if self.on_sonar:
+                self.on_sonar(ss)
+        elif ftype == 0x04 and len(payload) >= 4:
+            self.sonar_geom_raw = payload
+            if self.on_sonar_geom:   # mỗi lần nhận (2 s/lần): slam_node khởi động lại cũng có bảng
+                self.on_sonar_geom(payload)
         elif ftype == 0x02:
             text = payload.decode("utf-8", "replace")
             self.stats["text"] += 1
@@ -235,7 +273,9 @@ def main() -> int:
     args = ap.parse_args()
 
     texts = []
-    link = EspLink(args.port, args.baud, on_text=lambda s: (texts.append(s), print("  <-", s)))
+    sonar_last = {}
+    link = EspLink(args.port, args.baud, on_text=lambda s: (texts.append(s), print("  <-", s)),
+                   on_sonar=lambda s: sonar_last.__setitem__(s.idx, s.mm))
     link.start()
     link.send_line("INFO")
     t0 = time.monotonic()
@@ -252,6 +292,13 @@ def main() -> int:
                   f"lat={1000 * (time.monotonic() - s.t):.1f}ms")
         else:
             print("chưa nhận được mẫu IMU nào; stats:", link.stats)
+        if link.sonar_geom_raw:
+            from .sonar import SonarGeometry
+            g = SonarGeometry.parse(link.sonar_geom_raw)
+            print(f"  siêu âm: {g.describe()} | đo (mm): "
+                  + ", ".join(f"#{k}={'lỗi' if v == 0xFFFF else ('trống' if v == 0 else v)}" for k, v in sorted(sonar_last.items())))
+        else:
+            print("  siêu âm: chưa nhận bảng vị trí (firmware < 2.2?)")
     if first and link.last_imu:
         rate = (link.stats["imu"] - first[1]) / max(1e-6, link.last_imu.t_esp - first[0])
         print(f"Tốc độ mẫu IMU: {rate:.1f} Hz")

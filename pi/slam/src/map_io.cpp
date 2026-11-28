@@ -1,5 +1,8 @@
 #include "slam/map_io.h"
 
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -196,6 +199,17 @@ bool saveMap(const std::string &maps_dir, const std::string &id, const MapData &
     err = "Lỗi ghi places.yaml";
     return false;
   }
+  if (!m.obstacles.obs().empty() || !m.obstacles.erasures().empty()) {
+    if (!m.obstacles.save((tmp / "sonar.bin").string())) {
+      err = "Lỗi ghi sonar.bin";
+      return false;
+    }
+  }
+  if (!m.obstacle_png.empty()) {   // cùng hướng với grid.png (hàng 0 = y lớn nhất)
+    cv::Mat flipped;
+    cv::flip(m.obstacle_png, flipped, 0);
+    cv::imwrite((tmp / "obstacles.png").string(), flipped);
+  }
   {
     std::ofstream c(tmp / "config_snapshot.yaml");
     c << config_text;
@@ -255,6 +269,11 @@ bool loadMap(const std::string &dir, MapData &m, std::string &err) {
     }
   }
   m.places = loadPlaces((fs::path(dir) / "places.yaml").string());
+  const fs::path sb = fs::path(dir) / "sonar.bin";
+  if (fs::exists(sb) && !m.obstacles.load(sb.string())) {
+    err = "sonar.bin hỏng";
+    return false;
+  }
   return true;
 }
 

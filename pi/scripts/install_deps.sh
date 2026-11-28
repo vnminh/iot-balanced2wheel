@@ -21,6 +21,9 @@ systemctl disable --now hciuart 2>/dev/null || true
 systemctl disable --now serial-getty@ttyAMA0.service serial-getty@serial0.service 2>/dev/null || true
 [ "$REBOOT" = 1 ] && echo "!! Đã bật UART: cần KHỞI ĐỘNG LẠI Pi (sudo reboot) để có /dev/serial0"
 
+# Mic: mặc định nằm trên ESP32 #2 (firmware-mic/) gửi âm thanh qua WiFi -> Pi không cần I2S.
+# Chỉ khi nối INMP441 thẳng vào Pi mới chạy thêm: sudo bash setup_mic.sh (và --source mic trong voice.env).
+
 # Cho phép dịch vụ robotd (systemd --user) chạy ngay khi Pi khởi động, không cần đăng nhập
 loginctl enable-linger "${SUDO_USER:-iot09}" || true
 echo "XONG. Tiếp theo (không cần sudo):  bash ~/iot-ck/pi/scripts/build_slam.sh"

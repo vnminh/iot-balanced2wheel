@@ -156,6 +156,40 @@ Config Config::load(const std::string &path) {
   get(ct, "mcu_timeout", c.controller.mcu_timeout);
   get(ct, "max_pitch_deg", c.controller.max_pitch_deg);
   get(ct, "max_pitch_rate", c.controller.max_pitch_rate);
+  get(ct, "stop_dist", c.controller.stop_dist);
+  get(ct, "slow_dist", c.controller.slow_dist);
+  get(ct, "hold_block_s", c.controller.hold_block_s);
+  get(ct, "scan_deg", c.controller.scan_deg);
+  get(ct, "block_wait_s", c.controller.block_wait_s);
+  get(ct, "replan_retry_s", c.controller.replan_retry_s);
+  get(ct, "max_block_s", c.controller.max_block_s);
+  get(ct, "look_pause_s", c.controller.look_pause_s);
+
+  auto so = y["sonar"];
+  get(so, "enable", c.sonar.enable);
+  get(so, "max_pitch_deg", c.sonar.max_pitch_deg);
+  get(so, "gate_move", c.sonar.gate_move);
+  get(so, "gate_turn_deg", c.sonar.gate_turn_deg);
+  get(so, "fresh_s", c.sonar.fresh_s);
+  get(so, "corridor", c.sonar.corridor);
+
+  auto ob = y["obstacles"];
+  get(ob, "resolution", c.obstacles.resolution);
+  get(ob, "p_hit", c.obstacles.p_hit);
+  get(ob, "p_miss", c.obstacles.p_miss);
+  get(ob, "p_min", c.obstacles.p_min);
+  get(ob, "p_max", c.obstacles.p_max);
+  get(ob, "p_occ", c.obstacles.p_occ);
+  get(ob, "edge_weight", c.obstacles.edge_weight);
+  get(ob, "rays", c.obstacles.rays);
+  get(ob, "no_echo_free", c.obstacles.no_echo_free);
+  get(ob, "hit_range", c.obstacles.hit_range);
+  get(ob, "temp_tau", c.obstacles.temp_tau);
+  get(ob, "temp_window", c.obstacles.temp_window);
+  get(ob, "static_layer", c.obstacles.static_layer);
+  get(ob, "inflate", c.obstacles.inflate);
+  get(ob, "check_ahead", c.obstacles.check_ahead);
+  get(ob, "replan_start_snap", c.obstacles.replan_start_snap);
 
   auto q = y["quality"];
   get(q, "min_keyframes", c.quality.min_keyframes);

@@ -1,0 +1,18 @@
+[Unit]
+Description=Dieu khien giong noi: mic INMP441 -> Zipformer -> robotd (ws://127.0.0.1:8080/ws/voice)
+After=robotd.service sound.target
+Wants=robotd.service
+
+[Service]
+WorkingDirectory=%h/iot-ck/Speech-control
+# Đổi tham số (gain, kênh, chunk...) trong voice.env
+EnvironmentFile=-%h/iot-ck/Speech-control/voice.env
+ExecStart=%h/iot-ck/.venv/bin/python speech_control.py --no-color $VOICE_ARGS
+Restart=always
+RestartSec=10
+# ưu tiên CPU thấp hơn robotd / slam_node (điều khiển + SLAM phải chạy đúng thời gian)
+Nice=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

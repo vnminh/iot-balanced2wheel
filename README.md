@@ -1,23 +1,27 @@
-# iot-ck: Xe cân bằng 2 bánh + SLAM 2D nhìn trần + goto + web điều khiển
+# iot-ck: Xe cân bằng 2 bánh + SLAM 2D nhìn trần + goto + tránh vật cản + web + giọng nói
 
 ```
- MPU-6050 ──I2C──► ESP32 ──UART 460800──► Raspberry Pi 4: robotd (Python) ──stdin──► slam_node (C++)
- 2x A4988 ◄─STEP/DIR─┘ (IMU + bước + pitch 200 Hz)  ▲   UART, camera, web :8080 ◄─JSON─┘ EKF, keyframe, loop,
-                       ◄── VEL:v,t (10–20 Hz) ──────┤                                    pose graph, grid, A*,
-                                 camera OV5647 ─────┘ hướng LÊN TRẦN, 640x480 15 fps     pure pursuit
+ MPU-6050 ──I2C──► ESP32 #1 ──UART 460800──► Raspberry Pi 4: robotd (Python) ──stdin──► slam_node (C++)
+ HC-SR04 ×3 ─ECHO─┘ │  IMU + bước + pitch 200 Hz   ▲   UART, camera, web :8080 ◄─JSON─┘ EKF, keyframe, loop,
+ 2x A4988 ◄STEP/DIR─┘  SONAR + SONAR_GEOM (vị trí) ┤   giảm tốc theo siêu âm            pose graph, grid, A*,
+                    ◄── VEL:v,t (10–20 Hz) ────────┤                                    vật cản log-odds, replan,
+                              camera OV5647 ───────┘ hướng LÊN TRẦN, 640x480 15 fps     pure pursuit
+ INMP441 ─I2S─► ESP32 #2 ──WiFi ws://pi:8765/audio──► Speech-control (Zipformer) ──/ws/voice──► robotd (web ưu tiên)
 ```
 
 Thiết kế và lý do từng lựa chọn: **[SLAM-DESIGN.md](SLAM-DESIGN.md)** (mục 13 là bản rà soát so với xe thật).
 
 | Thư mục | Nội dung |
 |---|---|
-| `firmware/` | PlatformIO cho ESP32: cân bằng (PID tầng 400 Hz), nhận lệnh, gửi IMU + bước bánh + pitch |
+| `firmware/` | PlatformIO cho ESP32 #1: cân bằng (PID tầng 400 Hz), nhận lệnh, gửi IMU + bước bánh + pitch, siêu âm + dừng khẩn |
+| `firmware-mic/` | PlatformIO cho ESP32 #2: mic INMP441 → WiFi WebSocket tới Pi ([README](firmware-mic/README.md)) |
 | `pi/slam/` | Lõi SLAM 2D C++17 (`slam_node`), simulator `slam_sim`, GoogleTest |
 | `pi/robot/` | `robotd` (Python): UART, camera, chạy `slam_node`, web server (aiohttp), hiệu chỉnh camera |
 | `pi/web/` | Giao diện web (1 file HTML, không cần internet) |
 | `pi/config/` | `robot.yaml` (robotd), `slam.yaml` (mọi thông số SLAM) |
 | `pi/tools/slamlog.py` | Đọc / xuất / vẽ file log để replay |
-| `scripts/` | Chạy trên laptop: `flash_esp32.sh`, `deploy_pi.sh`, `flash_pi_sd.sh`, `sd_scan.py` |
+| `Speech-control/` | Giọng nói: mic INMP441, ASR tiếng Việt, từ điển sửa lỗi, gửi lệnh cho robotd ([README](Speech-control/README.md)) |
+| `scripts/` | Chạy trên laptop: `flash_esp32.sh`, `flash_esp32_mic.sh`, `deploy_pi.sh`, `flash_pi_sd.sh`, `sd_scan.py` |
 
 ## 1. Đấu dây
 
@@ -32,10 +36,25 @@ Dây đang nối vào **UART0** của ESP32 (dùng chung cổng USB, `LINK_UART 
 
 MPU-6050: VCC 3V3, GND, SDA GPIO21, SCL GPIO22, mũi tên X chỉ về trước xe, mặt linh kiện quay lên.
 
+**Siêu âm HC-SR04** → ESP32 #1 (mặc định 3 cái phủ ~110° phía trước, sửa trong `firmware/include/config.h`):
+
+| Cảm biến | TRIG | ECHO (qua cầu chia áp 1k/2k) | Vị trí (so với tâm trục bánh) | Hướng | Dừng khẩn |
+|---|---|---|---|---|---|
+| #0 trái | GPIO32 | GPIO34 | x 8 cm, y +5 cm | +40° | < 12 cm |
+| #1 giữa | GPIO33 | GPIO35 | x 9 cm, y 0 | 0° | < 15 cm |
+| #2 phải | GPIO4 | GPIO23 | x 8 cm, y −5 cm | −40° | < 12 cm |
+
+VCC 5 V, GND chung. **Thêm / bớt / dời / đổi góc cảm biến: chỉ sửa bảng `SONAR_SENSORS` trong `firmware/include/config.h`
+rồi nạp lại ESP32.** Pi không có cấu hình vị trí cảm biến: ESP32 gửi bảng này lên (khung `SONAR_GEOM`), robotd và
+slam_node dùng đúng như vậy.
+
+**Mic INMP441 → ESP32 #2** (riêng, không nối Pi): VDD 3V3, GND, SCK GPIO26, WS GPIO25, SD GPIO33, L/R → GND.
+Xem [firmware-mic/README.md](firmware-mic/README.md). (Nối thẳng vào Pi vẫn được: `pi/scripts/setup_mic.sh` + `--source mic`.)
+
 **Camera OV5647 phải gắn nhìn THẲNG LÊN TRẦN** (không nhìn tới trước như hệ OpenVINS cũ). Mặc định mép trên ảnh
 hướng về mũi xe (`camera.yaw_deg: 90`). Gắn kiểu khác thì chạy kiểm tra ở mục 5.
 
-## 2. Firmware ESP32 (2.1)
+## 2. Firmware ESP32 #1 (2.2)
 
 ```bash
 ./scripts/flash_esp32.sh              # build -> SSH dừng robotd + thả TX Pi -> nạp -> trả TX, kiểm tra IMU, bật robotd
@@ -46,16 +65,22 @@ NO_PI=1 ./scripts/flash_esp32.sh      # không SSH (đã rút dây TX của Pi)
 - Gói IMU 32 byte: thêm `pitch` (góc vòng cân bằng đang dùng) để SLAM bù nghiêng ảnh trần. Pi vẫn nhận gói 28 byte
   của firmware cũ (tự tính pitch, web nhắc nạp firmware mới).
 - `flags` bit2: bộ điều khiển chạm giới hạn (dễ trượt bước), SLAM tăng nhiễu odometry lúc đó.
+- 2.2: siêu âm đo lần lượt từng cảm biến bằng ngắt (~15 Hz mỗi cái, không chặn vòng cân bằng). Mỗi số đo một khung
+  `SONAR` (7 byte); bảng vị trí khung `SONAR_GEOM` lúc khởi động, mỗi 2 s và khi Pi gửi `INFO`. Gói IMU giữ 32 byte.
+- Dừng khẩn tại ESP32: lệnh TIẾN bị chặn khi cảm biến đo gần hơn ngưỡng của nó (vẫn cho lùi / xoay), báo `SONAR:STOP`.
+
+ESP32 #2 (mic): `./scripts/flash_esp32_mic.sh` (cắm USB vào laptop, điền WiFi trong `firmware-mic/include/secrets.h`).
 
 ## 3. Raspberry Pi: cài đặt
 
 ```bash
-./scripts/deploy_pi.sh --install    # lần đầu: apt + linger + venv + build slam_node (~10 phút) + service
+./scripts/deploy_pi.sh --install    # lần đầu: apt + UART + I2S mic + linger + venv + slam_node + robotd + giọng nói
+                                    # xong thì sudo reboot (UART, I2S chỉ có sau khi khởi động lại)
 ./scripts/deploy_pi.sh --build      # copy code + build lại slam_node + restart robotd (sau khi sửa C++)
 ./scripts/deploy_pi.sh              # copy code (Python/web/config) + restart robotd
 ```
 
-Trên Pi: `bash ~/iot-ck/pi/scripts/install.sh [--skip-apt] [--skip-slam]`. Gói apt: `libceres-dev libyaml-cpp-dev
+Trên Pi: `bash ~/iot-ck/pi/scripts/install.sh [--skip-apt] [--skip-slam] [--skip-voice]`. Gói apt: `libceres-dev libyaml-cpp-dev
 libopencv-dev libeigen3-dev` (không cần build GTSAM / OpenVINS). Web: **http://raspberrypi4.local:8080**.
 Chạy tay: `cd ~/iot-ck/pi && ../.venv/bin/python -m robot.main`.
 
@@ -77,9 +102,24 @@ Chạy tay: `cd ~/iot-ck/pi && ../.venv/bin/python -m robot.main`.
    rồi mới sang chặng sau, quay đầu được, chỉ dừng ở điểm cuối. Vận tốc / tốc độ quay cố định theo `controller.v_max`,
    `w_max` trong `slam.yaml` (mặc định 0,15 m/s, 1 rad/s), không chỉnh theo từng điểm. Thẻ dưới bản đồ hiện "Tới điểm k/n";
    huỷ, an toàn và "Thử lại" như goto.
+7. **Giọng nói** (mic INMP441, dịch vụ `voice`): "**tiến 10**" (cm), "**lùi 20**", "**xoay trái 180**" (độ),
+   "**xoay phải 90**", "**dừng**". Nói nhiều lệnh liền thì chạy lần lượt. Đo bằng bước bánh + gyro, không cần bản đồ.
+   **Web luôn ưu tiên**: đang lái / goto trên web thì lệnh giọng nói bị bỏ qua, bấm phím trên web huỷ lệnh giọng nói.
+   Từ điển sửa lỗi nhận dạng ("tiếng mười" → tiến 10, "soay chái" → xoay trái...) ở `Speech-control/vi_dictionary.py`.
+   Âm thanh đến từ ESP32 #2 qua WiFi (Speech-control là WebSocket server cổng 8765).
+8. **Tránh vật cản (siêu âm)**, ba lớp:
+   - ESP32 dừng khẩn khi vật quá sát (không phụ thuộc Pi).
+   - robotd giảm tốc khi TIẾN theo khoảng trống phía trước (từ 50 cm, dừng ở 15 cm) cho web, goto và giọng nói;
+     lệnh "tiến" bằng giọng nói gặp vật thì dừng và báo.
+   - slam_node ghi vật cản vào lưới log-odds (cách cập nhật của EGO-Planner, rút gọn cho siêu âm): lớp **tĩnh** khi tạo /
+     mở rộng bản đồ (neo keyframe, lưu cùng bản đồ) và lớp **tạm** lúc chạy (tự quên ~25 s). Goto: đường phía trước đè lên
+     ô vật cản (hoặc siêu âm giữ xe đứng > 1 s) → dừng, quét ±25°, chờ 3 s, còn chặn thì chạy lại A* tránh ô vật cản.
+   - Web: ô đỏ = vật cản tĩnh, cam = tạm; nón siêu âm quanh xe; nút **tẩy** (phím E) xoá vật cản ghi nhầm.
 
 | Trên web | Nội dung |
 |---|---|
+| Nón quanh xe, ô đỏ / cam | Siêu âm (cung đậm = khoảng cách đo được), vật cản tĩnh (đỏ, lưu cùng bản đồ) / tạm (cam, tự quên) |
+| Chip Mic / khung Giọng nói | Speech-control đã nối chưa, đang nghe (tím nhấp nháy), câu nghe được → câu đã sửa, lệnh đang chạy + tiến độ |
 | Bản đồ | Vùng đã đi (xanh lá = đường tâm planner dùng, xám xanh = vùng thân xe quét), quỹ đạo đã tối ưu, keyframe (xanh = có đặc trưng trần, xám = "mù", đỏ = nghi trượt bánh), loop (vàng), tái định vị (tím), địa điểm, đường A* |
 | Góc trên phải | Camera trần (đặc trưng ORB / ảnh gốc), bấm để đổi chỗ với bản đồ |
 | Thanh trên | Kết nối, MANUAL/GOTO, trạng thái xe, chế độ SLAM, độ bất định định vị, IMU, chất lượng bản đồ |

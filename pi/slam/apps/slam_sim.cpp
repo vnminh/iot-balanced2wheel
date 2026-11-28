@@ -2,8 +2,11 @@
 //
 //   Pha A (mapping): lái hình chữ nhật 3 m × 2 m hai vòng (vòng 2 có 1,5 s bánh kẹt), lưu địa điểm ở
 //                    các góc, lưu bản đồ "sim".
+//                    Có một hộp cố định cạnh đường: siêu âm ghi vào lớp vật cản tĩnh (neo keyframe).
 //   Pha B (localization): khởi động lại ở chỗ khác trên đường đã đi, tải bản đồ, xoay tại chỗ tới khi
 //                    tái định vị, goto các địa điểm. So vị trí thật lúc tới với vị trí thật lúc lưu.
+//   Pha C (vật cản tạm): đặt hộp chắn ngang đường goto -> bị chặn, quét, chờ, lập lại đường vòng, tới nơi.
+//                    Rồi hộp được dời đi trong lúc chờ -> đi tiếp đường cũ.
 //
 //   slam_sim --config pi/config/slam.yaml --maps /tmp/maps [--log pha_a.slamlog] [--verbose]
 // Mã thoát 0 = đạt tiêu chí (khép vòng, tái định vị, goto lệch < 15 cm).
@@ -43,6 +46,21 @@ int main(int argc, char **argv) {
 
   sim::SimParams sp;
   sp.stuck = {{100.0 + 95.0, 100.0 + 96.5}};   // trong vòng 2
+  // Hộp cố định cách cạnh dưới 0,5 m (siêu âm bên phải thấy khi đi qua)
+  const sim::SimBox fixed_box{1.40, -0.65, 1.65, -0.42};
+  // Tường phòng (cách đường đi ≥ 1 m): có tiếng vang xa như thực tế
+  const std::vector<sim::SimBox> walls = {{-1.1, -1.4, 4.1, -1.3}, {-1.1, 3.3, 4.1, 3.4}, {-1.1, -1.4, -1.0, 3.4},
+                                          {4.0, -1.4, 4.1, 3.4}};
+  sp.boxes = walls;
+  sp.boxes.push_back(fixed_box);
+  auto nearBox = [](const Eigen::Vector2d &p, const sim::SimBox &b, double m) {
+    return p.x() > b.x0 - m && p.x() < b.x1 + m && p.y() > b.y0 - m && p.y() < b.y1 + m;
+  };
+  auto nearWall = [&](const Eigen::Vector2d &p) {
+    for (const auto &w : walls)
+      if (nearBox(p, w, 0.15)) return true;
+    return false;
+  };
   SlamSystem::Options opt;
   opt.maps_dir = maps;
   opt.synchronous = true;
@@ -127,6 +145,20 @@ int main(int argc, char **argv) {
     const double e_map = std::hypot(map_end.x - tr.x, map_end.y - tr.y);
     const double e_odom = std::hypot(odom_end.x - tr.x, odom_end.y - tr.y);
     std::printf("  lệch vị trí cuối: SLAM %.3f m, chỉ odometry %.3f m\n", e_map, e_odom);
+    // Lớp vật cản tĩnh (neo keyframe): sau khi tối ưu, ô vật cản phải nằm quanh hộp thật
+    {
+      const auto st = sys.obstaclesStatic();
+      int near = 0;
+      int wall = 0;
+      for (const auto &p : st) near += nearBox(p, fixed_box, 0.12), wall += nearWall(p);
+      std::printf("  vật cản tĩnh: %zu ô (%d quanh hộp thật, %d ở tường), %zu số đo siêu âm neo keyframe\n", st.size(),
+                  near, wall, sys.staticObsCount());
+      if (near < 1) std::printf("  FAIL: lớp tĩnh không thấy hộp cố định\n"), pass = false;
+      if (std::getenv("SIM_DEBUG_OBST"))
+        for (const auto &p : st)
+          if (!nearBox(p, fixed_box, 0.12) && !nearWall(p)) std::printf("    ô sai: (%.2f, %.2f)\n", p.x(), p.y());
+      if (st.size() > size_t(near + wall) + 6) std::printf("  FAIL: lớp tĩnh có nhiều ô sai\n"), pass = false;
+    }
     if (sys.edgeCount(EdgeKind::Loop) < 1) std::printf("  FAIL: không có loop closure\n"), pass = false;
     if (e_map > 0.10) std::printf("  FAIL: lệch SLAM > 10 cm\n"), pass = false;
   }
@@ -149,6 +181,14 @@ int main(int argc, char **argv) {
       std::printf("FAIL\n");
       return 1;
     }
+    {
+      const auto st = sys.obstaclesStatic();
+      int near = 0;
+      for (const auto &p : st) near += nearBox(p, fixed_box, 0.12);
+      std::printf("  tải bản đồ: lớp vật cản tĩnh %zu ô (%d quanh hộp)\n", st.size(), near);
+      if (near < 1) std::printf("  FAIL: lớp tĩnh không được lưu / tải\n"), pass = false;
+    }
+    double t_mission_end = 0;
     for (const char *name : {"goc2", "xuat_phat", "goc3"}) {
       r.command(std::string("goto_place ") + name);
       const bool ok = r.navigate(120.0);
@@ -171,6 +211,7 @@ int main(int argc, char **argv) {
       const bool ok = r.navigate(240.0);
       const double t1 = w.t();
       std::printf("  nhiệm vụ %zu điểm: %s (%s)\n", seq.size(), ok ? "xong" : "KHÔNG xong", sys.navReason().c_str());
+      t_mission_end = t1;
       if (!ok) pass = false;
       for (size_t k = 0; k < seq.size(); k++) {
         const double d = r.minDist(truth_of[seq[k]].t(), t0, t1);
@@ -183,6 +224,54 @@ int main(int argc, char **argv) {
       if (e > 0.15) pass = false;
       r.command("nav_clear");
     }
+
+    // ---------------------------------------------------------------- Pha C: vật cản tạm
+    std::printf("== Pha C: vật cản tạm, lập lại đường ==\n");
+    std::map<std::string, Place> pl;
+    for (const auto &p : sys.places()) pl[p.name] = p;
+    {
+      // Đang ở xuat_phat (0,0). Hộp chắn giữa cạnh dưới, goto goc1 (3,0): đường thẳng bị chặn, phải vòng 3 cạnh kia
+      const sim::SimBox blk{1.40, -0.10, 1.60, 0.10, w.t(), 1e18};
+      w.addBox(blk);
+      const int rp0 = sys.replans();
+      bool saw_blocked = false;
+      const double t0 = w.t();
+      r.command("goto_place goc1");
+      const bool ok = r.navigate(240.0, [&] { saw_blocked |= sys.navState() == "blocked"; });
+      double dmin = 1e9;
+      for (double x = blk.x0; x <= blk.x1 + 1e-9; x += 0.05)
+        for (double y = blk.y0; y <= blk.y1 + 1e-9; y += 0.05) dmin = std::min(dmin, r.minDist({x, y}, t0, w.t()));
+      const double e = std::hypot(w.truth().x - truth_of["goc1"].x, w.truth().y - truth_of["goc1"].y);
+      std::printf("  hộp chắn đường: bị chặn %s, lập lại đường %d lần, %s, lệch %.3f m, tâm xe cách hộp gần nhất %.3f m (%s)\n",
+                  saw_blocked ? "có" : "KHÔNG", sys.replans() - rp0, ok ? "tới" : "KHÔNG tới", e, dmin,
+                  sys.navReason().c_str());
+      if (!saw_blocked || sys.replans() - rp0 < 1 || !ok || e > 0.15 || dmin < 0.10) pass = false;
+      r.command("nav_clear");
+      w.boxes().back().t_off = w.t();   // dọn hộp
+    }
+    {
+      // Từ goc1 (3,0) về xuat_phat qua cạnh dưới. Hộp chắn, bị dời đi 1 s sau khi xe báo "bị chặn" -> đi tiếp đường cũ
+      r.command("obst_clear_temp");
+      r.run(0, 0, 0.5);
+      const sim::SimBox blk{1.40, -0.10, 1.60, 0.10, w.t(), 1e18};
+      w.addBox(blk);
+      const size_t bi = w.boxes().size() - 1;
+      const int rp0 = sys.replans();
+      double t_blk = -1;
+      r.command("goto_place xuat_phat");
+      const bool ok = r.navigate(180.0, [&] {
+        if (t_blk < 0 && sys.navState() == "blocked") {
+          t_blk = w.t();
+          w.boxes()[bi].t_off = w.t() + 1.0;
+        }
+      });
+      const double e = std::hypot(w.truth().x - truth_of["xuat_phat"].x, w.truth().y - truth_of["xuat_phat"].y);
+      std::printf("  hộp bị dời khi đang chờ: bị chặn %s, lập lại đường %d lần, %s, lệch %.3f m (%s)\n",
+                  t_blk >= 0 ? "có" : "KHÔNG", sys.replans() - rp0, ok ? "tới" : "KHÔNG tới", e, sys.navReason().c_str());
+      if (t_blk < 0 || !ok || e > 0.15) pass = false;
+      r.command("nav_clear");
+    }
+    (void)t_mission_end;
   }
   std::printf(pass ? "PASS\n" : "FAIL\n");
   return pass ? 0 : 1;

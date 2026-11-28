@@ -48,6 +48,18 @@ bool dispatch(SlamSystem &sys, const Record &r, FILE *log) {
       }
       if (log) writeRecord(log, 'M', r.data.data(), uint32_t(r.data.size()));
       break;
+    case 'S':
+      if (r.data.size() >= sizeof(SonarRecord)) {
+        SonarRecord s;
+        std::memcpy(&s, r.data.data(), sizeof s);
+        sys.onSonar(s);
+      }
+      if (log) writeRecord(log, 'S', r.data.data(), uint32_t(r.data.size()));
+      break;
+    case 'G':
+      sys.onSonarGeom(r.data.data(), r.data.size());
+      if (log) writeRecord(log, 'G', r.data.data(), uint32_t(r.data.size()));
+      break;
     case 'I': {
       if (r.data.size() < 12) break;
       double t;

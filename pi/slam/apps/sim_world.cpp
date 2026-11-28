@@ -111,13 +111,77 @@ cv::Mat SimWorld::render() const {
   return img;
 }
 
+double SimWorld::sonarRange(int k) const {
+  const auto &m = p_.sonar_mount[k];
+  const Pose2 s = truth_ * Pose2(m[0], m[1], slam::deg2rad(m[2]));
+  const double half = slam::deg2rad(m[3]);
+  double best = 1e9;
+  for (int r = 0; r < 15; r++) {   // tiếng vang đầu tiên = vật gần nhất ở bất kỳ đâu trong chùm
+    const double a = s.th - half + 2 * half * r / 14, dx = std::cos(a), dy = std::sin(a);
+    for (const auto &b : p_.boxes) {
+      if (t_ < b.t_on || t_ >= b.t_off) continue;
+      double tmin = 0, tmax = 1e9;   // phương pháp slab
+      const double o[2] = {s.x, s.y}, d[2] = {dx, dy}, lo[2] = {b.x0, b.y0}, hi[2] = {b.x1, b.y1};
+      bool hit = true;
+      for (int ax = 0; ax < 2 && hit; ax++) {
+        if (std::fabs(d[ax]) < 1e-12) {
+          if (o[ax] < lo[ax] || o[ax] > hi[ax]) hit = false;
+        } else {
+          double t1 = (lo[ax] - o[ax]) / d[ax], t2 = (hi[ax] - o[ax]) / d[ax];
+          if (t1 > t2) std::swap(t1, t2);
+          tmin = std::max(tmin, t1);
+          tmax = std::min(tmax, t2);
+          if (tmin > tmax) hit = false;
+        }
+      }
+      if (hit && tmin > 0.02) best = std::min(best, tmin);
+    }
+  }
+  if (best > p_.sonar_range) return -1;
+  std::normal_distribution<double> n(0, p_.sonar_noise);
+  return std::max(0.02, best + n(rng_));
+}
+
+std::vector<uint8_t> SimWorld::sonarGeomBytes() const {
+  std::vector<uint8_t> b{1, uint8_t(p_.sonar_mount.size())};
+  auto put16 = [&](int v) { b.push_back(uint8_t(v & 0xff)), b.push_back(uint8_t((v >> 8) & 0xff)); };
+  put16(int(std::lround(p_.sonar_range * 1000)));
+  for (const auto &m : p_.sonar_mount) {
+    put16(int(std::lround(m[0] * 1000)));
+    put16(int(std::lround(m[1] * 1000)));
+    put16(int(std::lround(m[2] * 100)));
+    b.push_back(uint8_t(m[3]));
+    put16(m[2] == 0 ? 150 : 120);
+  }
+  return b;
+}
+
 // --------------------------------------------------------------------------------------------- runner
+void SimRunner::sonarTick() {
+  if (!w_.params().sonar || w_.params().sonar_mount.empty()) return;
+  if (!geom_sent_) {
+    const auto g = w_.sonarGeomBytes();
+    if (log_) slam::writeRecord(log_, 'G', g.data(), uint32_t(g.size()));
+    sys_.onSonarGeom(g.data(), g.size());
+    geom_sent_ = true;
+    next_sonar_ = w_.t();
+  }
+  if (w_.t() < next_sonar_) return;
+  next_sonar_ += w_.params().sonar_period;   // lần lượt từng cảm biến như firmware
+  const double d = w_.sonarRange(sonar_k_);
+  slam::SonarRecord r{w_.t(), uint8_t(sonar_k_), uint16_t(d < 0 ? 0 : std::lround(d * 1000))};
+  if (log_) slam::writeRecord(log_, 'S', &r, sizeof r);
+  sys_.onSonar(r);
+  sonar_k_ = (sonar_k_ + 1) % int(w_.params().sonar_mount.size());
+}
+
 void SimRunner::tick(double v, double w) {
   w_.step(v, w, dt_);
   hist_.emplace_back(w_.t(), w_.truth());
   const slam::McuRecord m = w_.mcu();
   if (log_) slam::writeRecord(log_, 'M', &m, sizeof m);
   sys_.onMcu(m);
+  sonarTick();
   if (w_.t() >= next_img_) {
     next_img_ += 1.0 / fps_;
     const cv::Mat img = w_.render();
@@ -169,11 +233,12 @@ void SimRunner::command(const std::string &c) {
   sys_.command(c);
 }
 
-bool SimRunner::navigate(double timeout) {
+bool SimRunner::navigate(double timeout, const std::function<void()> &each) {
   const double t_end = w_.t() + timeout;
   while (w_.t() < t_end) {
     const slam::ControlOutput c = sys_.lastCmd();
     tick(c.active ? c.v : 0, c.active ? c.w : 0);
+    if (each) each();
     if (!sys_.navActive()) break;
   }
   run(0, 0, 0.3);

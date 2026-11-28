@@ -22,7 +22,8 @@ find_package(Threads REQUIRED)
 
 add_library(slam2d STATIC
     src/config.cpp src/protocol.cpp src/wheel_odometry.cpp src/ekf2d.cpp src/frontend.cpp src/matcher.cpp
-    src/pose_graph.cpp src/traversed_grid.cpp src/planner.cpp src/controller.cpp src/map_io.cpp src/system.cpp)
+    src/pose_graph.cpp src/traversed_grid.cpp src/planner.cpp src/controller.cpp src/map_io.cpp src/system.cpp
+    src/obstacle_grid.cpp)
 target_include_directories(slam2d PUBLIC include)
 target_include_directories(slam2d SYSTEM PUBLIC ${OpenCV_INCLUDE_DIRS})
 # yaml-cpp: tên target khác nhau giữa các bản (yaml-cpp / yaml-cpp::yaml-cpp)
@@ -44,7 +45,8 @@ find_package(GTest QUIET)
 if (SLAM_TESTS AND GTest_FOUND)
   enable_testing()
   add_executable(slam_tests test/test_geometry.cpp test/test_ekf.cpp test/test_grid_planner.cpp
-      test/test_pose_graph.cpp test/test_matcher.cpp test/test_system.cpp test/test_controller.cpp apps/sim_world.cpp)
+      test/test_pose_graph.cpp test/test_matcher.cpp test/test_system.cpp test/test_controller.cpp test/test_obstacle.cpp
+      apps/sim_world.cpp)
   target_include_directories(slam_tests PRIVATE apps)
   target_link_libraries(slam_tests PRIVATE slam2d GTest::gtest_main)
   include(GoogleTest)

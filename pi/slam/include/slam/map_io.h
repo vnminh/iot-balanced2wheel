@@ -4,12 +4,15 @@
 //   graph.txt            cạnh odometry + cạnh thị giác (dạng pixel) + chiều cao trần
 //   grid.png/.yaml       center_layer (định dạng ROS map_server), grid_footprint.png
 //   places.yaml          địa điểm có tên
+//   sonar.bin            số đo siêu âm neo keyframe + vùng đã tẩy (lớp vật cản tĩnh, dựng lại khi tải)
+//   obstacles.png        ảnh lớp vật cản tĩnh lúc lưu (cùng lưới với grid.png, 0 = vật cản), để xem
 //   config_snapshot.yaml cấu hình lúc tạo bản đồ
 //   meta.json            tóm tắt cho web
 #include <string>
 #include <vector>
 
 #include "slam/keyframe.h"
+#include "slam/obstacle_grid.h"
 #include "slam/traversed_grid.h"
 
 namespace slam {
@@ -28,6 +31,8 @@ struct MapData {
   std::vector<VisualEdge> vis;
   std::vector<Place> places;
   double height_est = 0;        // chiều cao trần tự ước lượng lúc lưu (0 = chưa có)
+  StaticObstacles obstacles;    // lớp vật cản tĩnh (số đo gốc)
+  cv::Mat obstacle_png;         // CV_8U cùng kích thước grid, 0 = vật cản, 255 = còn lại (chỉ để xem)
 };
 
 // Ghi vào <maps_dir>/<id>.tmp rồi đổi tên (mất điện giữa chừng không làm hỏng bản cũ)

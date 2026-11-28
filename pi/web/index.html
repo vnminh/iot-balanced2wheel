@@ -53,6 +53,16 @@
   .dot.bad { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
   .mode { font-weight: 700; letter-spacing: .06em; }
   .mode.goto { color: var(--pin); border-color: rgba(255,210,60,.5); }
+  .mode.voice { color: #c792ff; border-color: rgba(199,146,255,.55); }
+  .dot.listen { background: #c792ff; box-shadow: 0 0 8px #c792ff; animation: pulse .8s ease-in-out infinite alternate; }
+  @keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
+  #voiceBox { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); display: grid; gap: 3px; }
+  #voiceBox .vh { display: flex; justify-content: space-between; gap: 6px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; }
+  #voiceBox .vt { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #voiceBox .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #voiceBox .vc { color: #c792ff; font-weight: 600; }
+  #voiceBox .vbar { height: 4px; border-radius: 2px; background: rgba(255,255,255,.07); overflow: hidden; }
+  #voiceBox .vbar b { display: block; height: 100%; background: #c792ff; width: 0; transition: width .1s; }
 
   /* ---------- cảnh báo ---------- */
   #warns { position: absolute; top: 58px; left: 50%; transform: translateX(-50%); z-index: 9; display: flex;
@@ -205,6 +215,7 @@
     <div class="chips">
       <span class="chip" id="cConn"><span class="dot"></span>Đang kết nối…</span>
       <span class="chip mode" id="cMode">MANUAL</span>
+      <span class="chip" id="cVoice" title="Điều khiển giọng nói (Speech-control, mic INMP441)"><span class="dot"></span>Mic —</span>
       <span class="chip" id="cRobot"><span class="dot"></span>Xe —</span>
       <span class="chip" id="cSlam"><span class="dot"></span>SLAM —</span>
       <span class="chip" id="cLoc"><span class="dot"></span>Định vị —</span>
@@ -221,6 +232,7 @@
     <div class="sep"></div>
     <button class="tool" id="tMission" data-tip="Nhiệm vụ: chuỗi điểm (M)"></button>
     <button class="tool" id="tPlaces" data-tip="Địa điểm"></button>
+    <button class="tool" id="tErase" data-tip="Tẩy vật cản (E): bấm lên bản đồ"></button>
     <button class="tool" id="tSave" data-tip="Lưu bản đồ"><span class="badge" id="saveBadge"></span></button>
     <button class="tool" id="tMaps" data-tip="Bản đồ / chế độ"></button>
     <button class="tool" id="tLog" data-tip="Nhật ký"></button>
@@ -242,6 +254,7 @@
       <label class="sl"><span>Tiến/lùi</span><input type="range" id="spd" min="0.04" max="0.20" step="0.01" value="0.12"><span class="num" id="spdVal">0.12 m/s</span></label>
       <label class="sl"><span>Xoay</span><input type="range" id="rot" min="0.02" max="0.10" step="0.01" value="0.05"><span class="num" id="rotVal">0.05 m/s</span></label>
     </div>
+    <div id="voiceBox" hidden></div>
   </section>
 
   <section id="telem" class="glass">
@@ -276,6 +289,8 @@
         <span>Ảnh nhận / xử lý / bỏ</span><span id="kImg">—</span>
         <span>IMU / UART</span><span id="kImu">—</span>
         <span>Số bước T / P</span><span id="kSteps">—</span>
+        <span>Siêu âm (cm) / trống trước</span><span id="kSonar">—</span>
+        <span>Vật cản tĩnh / tạm / replan</span><span id="kObst">—</span>
       </div>
     </div>
   </section>
@@ -309,6 +324,7 @@
     tMaps: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
     tLog: '<path d="M4 6h16M4 12h16M4 18h10"/>',
     tCalib: '<rect x="3" y="7" width="18" height="13" rx="2"/><circle cx="12" cy="13.5" r="3.5"/><path d="M9 7l1.5-3h3L15 7"/>',
+    tErase: '<path d="M16 3l5 5-10 10H6l-3-3z"/><path d="M9 21h12M12 7l5 5"/>',
   };
   for (const [id, path] of Object.entries(ICON))
     $(id).insertAdjacentHTML("afterbegin", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`);
@@ -320,11 +336,12 @@
   // ------------------------------------------------------------- trạng thái
   let ws = null, S = null;                 // S = bản tin state gần nhất (robot, camera, slam)
   let graph = { kfs: [], edges: [], traj: [], slip: [] }, grid = null, gridImg = null, places = [], path = { pts: [] };
+  let obst = { static: [], temp: [], res: 0.05 }, eraseMode = false;
   let events = [], pose = null, follow = true, mapsList = null;
   let view = { cx: 0, cy: 0, scale: 80 };  // pixel / m
   let mainView = "map", pendingPin = null, nav = { state: "idle" }, drawerMode = null, calibOut = "";
   let missionMode = false, missionPts = [];   // chế độ nhiệm vụ: chuỗi điểm người dùng chọn (chưa gửi)
-  const NAV_ACTIVE = ["following", "rotating", "final_rotate"];
+  const NAV_ACTIVE = ["following", "rotating", "final_rotate", "blocked"];
   const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
 
   // ------------------------------------------------- đổi khung lớn / khung nhỏ
@@ -382,6 +399,13 @@
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(gridImg, sx, sy, grid.ny * grid.res * view.scale, grid.nx * grid.res * view.scale);
     }
+    // vật cản: tĩnh (đỏ, lưu cùng bản đồ) và tạm (cam, tự quên)
+    const cs = Math.max(1.5, (obst.res || 0.05) * view.scale);
+    for (const [list, col] of [[obst.static || [], "rgba(255,84,104,.85)"], [obst.temp || [], "rgba(255,159,67,.75)"]]) {
+      ctx.fillStyle = col;
+      for (const q of list) { const [sx, sy] = toScreen(q[0], q[1]);
+        if (sx > -cs && sy > -cs && sx < W + cs && sy < H + cs) ctx.fillRect(sx - cs / 2, sy - cs / 2, cs, cs); }
+    }
     // quỹ đạo đã tối ưu
     const T = graph.traj || [];
     if (T.length > 1) { ctx.strokeStyle = "rgba(255,107,107,.85)"; ctx.lineWidth = 1.5; ctx.beginPath();
@@ -431,6 +455,27 @@
     for (const p of places) drawPin(p.x, p.y, "#39d98a", p.name);
     const tg = navTarget();
     if (tg && !runMission()) drawPin(tg.x, tg.y, "#ffd23c", "");
+    // nón siêu âm (vị trí cảm biến do ESP32 gửi): cung đậm = mọi chỗ vật có thể nằm ở khoảng cách đo được
+    const so = S && S.sonar;
+    if (pose && so && so.geom) {
+      so.geom.forEach((g, k) => {
+        const mm = so.mm[k], age = so.age[k];
+        const c = Math.cos(pose.th), s_ = Math.sin(pose.th);
+        const wx = pose.x + c * g[0] - s_ * g[1], wy = pose.y + s_ * g[0] + c * g[1];
+        const dir = pose.th + g[2] * Math.PI / 180, half = g[3] * Math.PI / 180;
+        const [sx, sy] = toScreen(wx, wy);
+        if (mm === null || mm === undefined || age > 1) return;
+        if (mm === 65535) { ctx.strokeStyle = "#ff5468"; ctx.lineWidth = 2; ctx.beginPath();
+          ctx.moveTo(sx - 5, sy - 5); ctx.lineTo(sx + 5, sy + 5); ctx.moveTo(sx + 5, sy - 5); ctx.lineTo(sx - 5, sy + 5); ctx.stroke(); return; }
+        const d = mm === 0 ? so.max_range : mm / 1000, R = d * view.scale;
+        const col = mm === 0 ? "60,198,255" : d < 0.15 ? "255,84,104" : d < 0.5 ? "255,178,36" : "57,217,138";
+        // góc trên màn hình: x map hướng lên, y map sang trái -> góc canvas = −(θ + π/2)
+        const a0 = -(dir + half) - Math.PI / 2, a1 = -(dir - half) - Math.PI / 2;
+        ctx.fillStyle = `rgba(${col},${mm === 0 ? 0.05 : 0.13})`;
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.arc(sx, sy, R, a0, a1); ctx.closePath(); ctx.fill();
+        if (mm !== 0) { ctx.strokeStyle = `rgba(${col},.95)`; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(sx, sy, R, a0, a1); ctx.stroke(); }
+      });
+    }
     // xe
     if (pose) {
       const [sx, sy] = toScreen(pose.x, pose.y);
@@ -487,6 +532,7 @@
   }, { passive: false });
 
   function onMapTap(x, y) {
+    if (eraseMode) { send({ type: "obst_erase", x, y, r: 0.2 }); return; }
     if (NAV_ACTIVE.includes(nav.state)) { toast("Xe đang chạy: huỷ trước (Esc)"); return; }
     if (missionMode) {
       if (nav.state !== "idle") send({ type: "nav_clear" });
@@ -505,6 +551,12 @@
     renderGoto(); needDraw = true;
   }
   $("tMission").onclick = () => setMission(!missionMode);
+  function setErase(on) {
+    eraseMode = on; $("tErase").classList.toggle("on", on);
+    if (on) { setMission(false); pendingPin = null; toast("Tẩy vật cản: bấm lên ô đỏ / cam trên bản đồ (bán kính 20 cm). Bấm lại nút để thoát.", 4000); }
+    renderGoto(); needDraw = true;
+  }
+  $("tErase").onclick = () => setErase(!eraseMode);
   function fitTo(list) {
     if (!list.length) return;
     let [a, b, c, d] = [1e9, -1e9, 1e9, -1e9];
@@ -549,7 +601,13 @@
     }
     const d = nt && pose ? Math.hypot(nt.x - pose.x, nt.y - pose.y) : null;
     const main = (lbl ? lbl + " · " : "") + (nt ? `${ntl}x ${fmt(nt.x)}  y ${fmt(nt.y)} m` : "") + (d !== null ? ` · cách ${fmt(d)} m` : "");
-    if (NAV_ACTIVE.includes(nav.state)) {
+    if (nav.state === "blocked") {
+      const b = nav.blocked || {};
+      title = "Vật cản chặn đường";
+      const step = (b.scan ?? 3) < 3 ? "đang quét ±25° tại chỗ" : (b.next_replan > 0 ? `chờ ${fmt(b.next_replan, 0)} s rồi tìm đường khác` : "đang tìm đường vòng");
+      sub = `${b.cause || ""} · ${step} · đã chặn ${fmt(b.t, 0)} s` + (nav.replans ? ` · đã lập lại đường ${nav.replans} lần` : "");
+      btns = `<button class="btn danger" data-g="cancel">Huỷ (Esc)</button>`;
+    } else if (NAV_ACTIVE.includes(nav.state)) {
       title = "Đang đi tới";
       const ph = { following: "Bám đường đi", rotating: "Xoay tại chỗ về hướng đường đi", final_rotate: "Xoay về hướng đích" }[nav.state];
       sub = (runMission() && nav.leg ? `Tới điểm ${nav.leg[0]}/${nav.leg[1]} · ` : "") +
@@ -615,12 +673,14 @@
     if (e.key === "Escape") {
       if (NAV_ACTIVE.includes(nav.state)) send({ type: "goto_cancel" });
       else if (drawerMode) openDrawer(null);
+      else if (eraseMode) setErase(false);
       else if (missionMode && nav.state === "idle") setMission(false);
       else if (pendingPin) { pendingPin = null; renderGoto(); needDraw = true; }
       return;
     }
     if (e.code === "KeyF") { setFollow(!follow); return; }
     if (e.code === "KeyM") { setMission(!missionMode); return; }
+    if (e.code === "KeyE") { setErase(!eraseMode); return; }
     if (e.key === "Backspace" && missionMode && missionPts.length) { e.preventDefault(); missionPts.pop(); renderGoto(); needDraw = true; return; }
     const isSpace = e.code === "Space" || e.key === " ", d = keyDir(e);
     if (!d && !isSpace) return;
@@ -762,13 +822,41 @@
   const STATE_VI = { CALIBRATING: "Hiệu chỉnh gyro", WAITING: "Chờ dựng xe", BALANCING: "Đang cân bằng", NO_LINK: "Không có UART", UNKNOWN: "Chưa có dữ liệu" };
   function chip(id, cls, html) { $(id).innerHTML = dot(cls) + html; }
 
+  // Giọng nói: web luôn được ưu tiên (bấm phím / goto huỷ lệnh giọng nói)
+  function renderVoice(vo) {
+    if (!vo) { chip("cVoice", "", "Mic tắt"); $("voiceBox").hidden = true; return; }
+    chip("cVoice", !vo.connected ? "bad" : vo.listening ? "listen" : "ok",
+      !vo.connected ? "Mic: chưa chạy" : vo.listening ? "Mic: đang nghe…" : vo.current ? "Mic: " + esc(vo.current.desc) : "Mic sẵn sàng");
+    let h = "";
+    if (vo.connected || vo.current || (vo.heard && vo.heard.text)) {
+      h += `<div class="vh"><span>Giọng nói</span><span>${vo.connected ? "" : "chưa kết nối"}</span></div>`;
+      if (vo.listening && vo.partial) h += `<div class="vt">≈ ${esc(vo.partial)}</div>`;
+      else if (vo.heard && vo.heard.text) {
+        const hd = vo.heard;
+        h += `<div class="vt" title="Đã sửa: ${esc(hd.normalized || "")}">“${esc(hd.text)}” <span class="hint">${esc(hd.time || "")}</span></div>`;
+        if (hd.commands && hd.commands.length) h += `<div class="vc">${hd.commands.map(esc).join(" · ")}</div>`;
+        else if (hd.errors && hd.errors.length) h += `<div class="hint">${esc(hd.errors[0])}</div>`;
+      }
+      if (vo.current) {
+        const c = vo.current, pct = Math.max(0, Math.min(100, 100 * c.done / (c.target || 1)));
+        h += `<div class="vc">▶ ${esc(c.desc)} · ${fmt(Math.abs(c.done), 1)}/${fmt(Math.abs(c.target), 0)} ${c.unit}</div><div class="vbar"><b style="width:${pct}%"></b></div>`;
+      } else if (vo.last) h += `<div class="hint">${esc(vo.last)}</div>`;
+      if (vo.queue && vo.queue.length) h += `<div class="hint">Chờ: ${vo.queue.map(esc).join(" → ")}</div>`;
+    }
+    $("voiceBox").hidden = !h;
+    if ($("voiceBox").dataset.k !== h) { $("voiceBox").innerHTML = h; $("voiceBox").dataset.k = h; }
+  }
+
   function onState(m) {
     S = m;
     const r = m.robot || {}, sl = m.slam || {}, st = r.state || "UNKNOWN", run = sl.status === "running" && sl.type === "slam";
     nav = sl.nav || { state: "idle" };
     const active = NAV_ACTIVE.includes(nav.state);
-    $("cMode").textContent = active ? "GOTO" : "MANUAL";
+    const vo = m.voice, vMove = !!(vo && (vo.current || (vo.queue && vo.queue.length)));
+    $("cMode").textContent = active ? "GOTO" : vMove ? "VOICE" : "MANUAL";
     $("cMode").classList.toggle("goto", active);
+    $("cMode").classList.toggle("voice", !active && vMove);
+    renderVoice(vo);
     chip("cRobot", st === "BALANCING" ? "ok" : st === "WAITING" ? "warn" : "bad", `<b>${STATE_VI[st] || st}</b>`);
     if (!m.slam) chip("cSlam", "bad", "SLAM tắt");
     else if (!run) chip("cSlam", "bad", "SLAM lỗi");
@@ -790,7 +878,11 @@
     if (m.camera && m.camera.error) W.push(["bad", m.camera.error]);
     else if (m.camera && m.camera.restarts) W.push(["", `Camera đã treo và tự mở lại ${m.camera.restarts} lần: kiểm tra nguồn 5 V của Pi.`]);
     if (run && sl.frames && sl.frames.processed > 5 && sl.feats < 100) W.push(["", `Ít đặc trưng trần (${sl.feats} ORB): trần trơn / tối. Bật đèn, dán vài hình lên trần.`]);
-    if (r.motors !== undefined && r.fw_pitch === false) W.push(["", "Firmware cũ (không gửi pitch): nạp firmware 2.1 (scripts/flash_esp32.sh)."]);
+    if (r.motors !== undefined && r.fw_pitch === false) W.push(["", "Firmware cũ (không gửi pitch): nạp firmware 2.2 (scripts/flash_esp32.sh)."]);
+    const so = m.sonar;
+    if (so && so.faults && so.faults.length) W.push(["bad", `Siêu âm #${so.faults.join(", #")} lỗi (ECHO không lên): kiểm tra dây, cầu chia áp. Xe chạy tối đa nửa tốc độ.`]);
+    else if (so && so.fw_stop) W.push(["", `ESP32 dừng khẩn: vật sát phía trước (${so.fw_stop}). Lùi hoặc xoay để thoát.`]);
+    else if (!so && r.imu_rate > 50 && !r.error) W.push(["", "Chưa nhận bảng vị trí siêu âm từ ESP32 (firmware < 2.2?): chưa có tránh vật cản."]);
     const wh = W.slice(0, 3).map(([c, t]) => `<div class="wmsg ${c}">${esc(t)}</div>`).join("");
     if ($("warns").dataset.k !== wh) { $("warns").innerHTML = wh; $("warns").dataset.k = wh; }
 
@@ -815,6 +907,11 @@
     $("tiltMark").style.top = `${50 + Math.max(-15, Math.min(15, -(r.tilt || 0))) / 15 * 46}%`;
     $("kImu").textContent = r.error ? "lỗi" : `${fmt(r.imu_rate, 0)} Hz · CRC ${r.crc_err || 0} · mất ${r.lost || 0}`;
     $("kSteps").textContent = r.steps ? `${r.steps[0]} / ${r.steps[1]}` : "—";
+    { const so = m.sonar;
+      $("kSonar").textContent = so ? so.mm.map((v) => v === null ? "—" : v === 65535 ? "lỗi" : v === 0 ? "∞" : fmt(v / 10, 0)).join(" / ") +
+        ` · ${so.clear === null ? "∞" : fmt(so.clear * 100, 0) + " cm"}${so.cap !== null ? " · giảm tốc" : ""}` : "—";
+      const ss = sl.sonar;
+      $("kObst").textContent = ss ? `${ss.static} / ${ss.temp} ô · ${(sl.nav && sl.nav.replans) || 0}` : "—"; }
     renderGoto();
     if (["save", "log", "places"].includes(drawerMode)) renderDrawer(false);
     needDraw = true;
@@ -855,11 +952,12 @@
         case "events": events = m.items || []; break;
         case "event":
           events = events.concat([{ t: new Date().toTimeString().slice(0, 8), level: m.level, msg: m.msg }]).slice(-60);
-          if (m.level !== "info" || /tái định vị|Đã tới/.test(m.msg)) toast(m.msg, 3000);
+          if (m.level !== "info" || /tái định vị|Đã tới|🎤 (Xong|Đã dừng)/.test(m.msg)) toast(m.msg, 3000);
           if (drawerMode === "log") renderDrawer(false);
           break;
         case "reply": onReply(m); break;
         case "maps": mapsList = m.items; if (drawerMode === "maps") renderDrawer(true); break;
+        case "obstacles": obst = m; needDraw = true; break;
       }
     };
   }

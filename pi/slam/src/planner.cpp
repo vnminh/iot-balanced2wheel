@@ -25,15 +25,15 @@ bool nearestFree(const TraversedGrid &g, const Eigen::Vector2d &p, double max_di
 }
 
 PlanResult planPath(const TraversedGrid &g, const Eigen::Vector2d &start, const Eigen::Vector2d &goal,
-                    const PlannerCfg &cfg, double center_tol) {
+                    const PlannerCfg &cfg, double center_tol, double start_snap) {
   PlanResult r;
   if (g.empty() || g.freeCells() == 0) {
     r.why = "Chưa có bản đồ vùng đã đi";
     return r;
   }
   int si, sj, gi, gj;
-  if (!nearestFree(g, start, cfg.max_snap, si, sj)) {
-    r.why = "Xe đang ở ngoài vùng đã đi";
+  if (!nearestFree(g, start, start_snap > 0 ? start_snap : cfg.max_snap, si, sj)) {
+    r.why = start_snap > 0 ? "Xe bị vật cản bao quanh / ngoài vùng đã đi" : "Xe đang ở ngoài vùng đã đi";
     return r;
   }
   if (!nearestFree(g, goal, cfg.max_snap, gi, gj)) {

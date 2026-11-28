@@ -69,7 +69,10 @@ SlamSystem::SlamSystem(const Config &cfg, const Options &opt, Emit emit)
       wo_(cfg.robot.metersPerStep(), cfg.robot.wheel_base),
       pe_(cfg.ekf.pitch_filter_tau),
       ekf_(cfg.ekf),
-      ctrl_(cfg.controller) {
+      ctrl_(cfg.controller),
+      lop_(LogOddsParams::from(cfg.obstacles)),
+      temp_(cfg.obstacles.resolution, cfg.obstacles.temp_tau),
+      static_(cfg.obstacles.resolution) {
   if (!opt_.shm_dir.empty()) {
     std::error_code ec;
     fs::create_directories(opt_.shm_dir, ec);
@@ -426,10 +429,19 @@ void SlamSystem::controlTick(double dt) {
   in.pitch = pitch_;
   in.pitch_rate = pitch_rate_;
   in.mcu_age = 0;
+  in.clear_front = clearFront();
   const bool was = ctrl_.active();
+  if (was) in.path_blocked = pathBlockedNow(in.T_map_odom * in.odom);
+  const std::string prev_state = ctrl_.state();
   cmd_ = ctrl_.tick(in, dt);
+  if (ctrl_.state() == "blocked" && prev_state != "blocked")
+    event("warn", ctrl_.blockCause() + ": dừng, quét ±" + jnum(cfg_.controller.scan_deg, 0) + "°, chờ " +
+                      jnum(cfg_.controller.block_wait_s, 0) + " s");
+  if (prev_state == "blocked" && ctrl_.state() == "following") event("info", "Hết vật cản, đi tiếp đường cũ");
+  if (ctrl_.replanRequested()) replanFromHere();
+  if (t_ - last_obst_emit_t_ >= 0.5) emitObstacles();
   if (mission_pts_.size() > 1) {
-    const int leg = currentLeg();
+    const int leg = leg_offset_ + currentLeg();
     if (leg > last_leg_ && leg < int(mission_pts_.size())) event("info", "Qua điểm " + std::to_string(leg) + "/" +
                                                                          std::to_string(mission_pts_.size()));
     last_leg_ = std::max(last_leg_, leg);
@@ -505,37 +517,223 @@ void SlamSystem::startRoute(const std::vector<Eigen::Vector2d> &goals, std::opti
     g = grid_;
     start = T_map_odom_ * ekf_.pose();
   }
-  std::vector<Eigen::Vector2d> wps, snapped;
-  std::vector<size_t> ends;
-  Eigen::Vector2d from = start.t();
-  double length = 0, max_snap = 0;
-  for (size_t k = 0; k < goals.size(); k++) {
-    const PlanResult p = planPath(g, from, goals[k], cfg_.planner, cfg_.grid.center_tolerance);
-    if (!p.ok) {
-      reply(cmd, false, goals.size() > 1 ? "Điểm " + std::to_string(k + 1) + ": " + p.why : p.why);
-      return;
-    }
-    for (const auto &w : p.waypoints)
-      if (wps.empty() || (w - wps.back()).norm() > 1e-6) wps.push_back(w);
-    if (wps.empty()) wps.push_back(p.goal);
-    ends.push_back(wps.size() - 1);
-    snapped.push_back(p.goal);
-    length += p.length;
-    max_snap = std::max(max_snap, p.goal_snap);
-    from = p.goal;
+  Route rt;
+  std::string why;
+  int bad = 0;
+  if (!planRoute(g, start, goals, -1, rt, why, bad)) {
+    reply(cmd, false, goals.size() > 1 ? "Điểm " + std::to_string(bad + 1) + ": " + why : why);
+    return;
   }
   nav_label_ = label;
-  mission_pts_ = goals.size() > 1 ? snapped : std::vector<Eigen::Vector2d>();
-  leg_ends_ = ends;
+  mission_pts_ = goals.size() > 1 ? rt.snapped : std::vector<Eigen::Vector2d>();
+  leg_ends_ = rt.ends;
   last_leg_ = 0;
-  ctrl_.start(wps, theta, t_, std::vector<size_t>(ends.begin(), ends.end() - 1));
+  route_goals_ = goals;
+  route_theta_ = theta;
+  leg_offset_ = 0;
+  ctrl_.start(rt.wps, theta, t_, std::vector<size_t>(rt.ends.begin(), rt.ends.end() - 1));
   emitPath();
-  std::string msg = (goals.size() > 1 ? "Bắt đầu " : "Đi tới ") + label + ": " + jnum(length, 2) + " m";
-  if (max_snap > 0.02) msg += " (điểm dời tối đa " + jnum(max_snap * 100, 0) + " cm vào vùng đã đi)";
+  std::string msg = (goals.size() > 1 ? "Bắt đầu " : "Đi tới ") + label + ": " + jnum(rt.length, 2) + " m";
+  if (rt.max_snap > 0.02) msg += " (điểm dời tối đa " + jnum(rt.max_snap * 100, 0) + " cm vào vùng đã đi)";
   reply(cmd, true, msg,
-        "\"goal\":[" + jnum(snapped.back().x()) + "," + jnum(snapped.back().y()) + "],\"length\":" + jnum(length, 2) +
-            ",\"snap\":" + jnum(max_snap, 3));
+        "\"goal\":[" + jnum(rt.snapped.back().x()) + "," + jnum(rt.snapped.back().y()) + "],\"length\":" +
+            jnum(rt.length, 2) + ",\"snap\":" + jnum(rt.max_snap, 3));
   event("info", msg);
+}
+
+bool SlamSystem::planRoute(const TraversedGrid &g0, const Pose2 &start, const std::vector<Eigen::Vector2d> &goals,
+                           double start_snap, Route &r, std::string &why, int &bad_leg) {
+  // Vùng đi được = vùng đã đi trừ ô vật cản (tĩnh + tạm) đã phình
+  TraversedGrid g = g0;
+  const std::vector<Eigen::Vector2d> &obst = obstaclePointsMap();
+  if (!g.empty() && !obst.empty()) {
+    g.center = g0.center.clone();
+    g.center.setTo(0, obstacleMask(g, obst, cfg_.obstacles.inflate));
+  }
+  r = Route();
+  Eigen::Vector2d from = start.t();
+  for (size_t k = 0; k < goals.size(); k++) {
+    const PlanResult p = planPath(g, from, goals[k], cfg_.planner, cfg_.grid.center_tolerance, k == 0 ? start_snap : -1);
+    if (!p.ok) {
+      why = p.why;
+      bad_leg = int(k);
+      return false;
+    }
+    for (const auto &w : p.waypoints)
+      if (r.wps.empty() || (w - r.wps.back()).norm() > 1e-6) r.wps.push_back(w);
+    if (r.wps.empty()) r.wps.push_back(p.goal);
+    r.ends.push_back(r.wps.size() - 1);
+    r.snapped.push_back(p.goal);
+    r.length += p.length;
+    r.max_snap = std::max(r.max_snap, p.goal_snap);
+    from = p.goal;
+  }
+  return true;
+}
+
+void SlamSystem::replanFromHere() {
+  const int done = leg_offset_ + currentLeg();   // số chặng đã xong (tính cả các lần lập lại trước)
+  std::vector<Eigen::Vector2d> goals(route_goals_.begin() + std::min<size_t>(done, route_goals_.size()),
+                                     route_goals_.end());
+  if (goals.empty()) {
+    ctrl_.replanFailed(t_ + cfg_.controller.replan_retry_s);
+    return;
+  }
+  TraversedGrid g;
+  Pose2 start;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    g = grid_;
+    start = T_map_odom_ * ekf_.pose();
+  }
+  obst_cache_t_ = -1e9;   // lấy vật cản mới nhất
+  Route rt;
+  std::string why;
+  int bad = 0;
+  if (!planRoute(g, start, goals, cfg_.obstacles.replan_start_snap, rt, why, bad)) {
+    ctrl_.replanFailed(t_ + cfg_.controller.replan_retry_s);
+    if (why != last_replan_why_ || t_ - last_replan_warn_t_ > 10) {
+      event("warn", "Chưa có đường vòng: " + why + " (thử lại sau " + jnum(cfg_.controller.replan_retry_s, 0) + " s)");
+      last_replan_why_ = why;
+      last_replan_warn_t_ = t_;
+    }
+    return;
+  }
+  leg_offset_ = done;
+  leg_ends_ = rt.ends;
+  ctrl_.start(rt.wps, route_theta_, t_, std::vector<size_t>(rt.ends.begin(), rt.ends.end() - 1));
+  ++replans_;
+  last_replan_why_.clear();
+  emitPath();
+  event("info", "Đã tìm đường khác tránh vật cản: " + jnum(rt.length, 2) + " m");
+}
+
+// ------------------------------------------------------------------------------------- siêu âm / vật cản
+void SlamSystem::onSonarGeom(const uint8_t *d, size_t n) {
+  SonarGeometry g;
+  if (!SonarGeometry::parse(d, n, g)) return;
+  bool same = g.sensors.size() == sonar_geom_.sensors.size() && g.max_range == sonar_geom_.max_range;
+  for (size_t k = 0; same && k < g.sensors.size(); k++)
+    same = std::fabs(g.sensors[k].mount.x - sonar_geom_.sensors[k].mount.x) < 1e-6 &&
+           std::fabs(g.sensors[k].mount.y - sonar_geom_.sensors[k].mount.y) < 1e-6 &&
+           std::fabs(g.sensors[k].mount.th - sonar_geom_.sensors[k].mount.th) < 1e-6 &&
+           std::fabs(g.sensors[k].half - sonar_geom_.sensors[k].half) < 1e-6;
+  if (same) return;
+  sonar_geom_ = g;
+  sonar_last_.assign(g.sensors.size(), SonarLast());
+  event("info", "Siêu âm: " + std::to_string(g.sensors.size()) + " cảm biến (bảng vị trí từ ESP32), tầm " +
+                    jnum(g.max_range, 1) + " m");
+}
+
+void SlamSystem::onSonar(const SonarRecord &r) {
+  if (temp_reset_.exchange(false)) temp_.clear();
+  if (!cfg_.sonar.enable || r.idx >= sonar_geom_.sensors.size()) return;
+  SonarLast &sl = sonar_last_[r.idx];
+  sl.t = r.t;
+  sl.mm = r.mm;
+  if (r.mm == SONAR_FAULT || !have_mcu_) return;
+  if (std::fabs(pitch_) > deg2rad(cfg_.sonar.max_pitch_deg)) return;   // chùm có thể đang quét sàn
+  const SonarSensor &ss = sonar_geom_.sensors[r.idx];
+  const Pose2 sensor = interp(r.t).odom * ss.mount;
+  // Cổng: số đo khi cảm biến đứng yên lặp lại đúng một cung, không độc lập -> chỉ nhận khi đã dời / xoay
+  if (sl.has_int) {
+    const Pose2 dlt = Pose2::between(sl.last_int, sensor);
+    if (std::hypot(dlt.x, dlt.y) < cfg_.sonar.gate_move && std::fabs(dlt.th) < deg2rad(cfg_.sonar.gate_turn_deg)) return;
+  }
+  sl.has_int = true;
+  sl.last_int = sensor;
+  const double d = r.mm == SONAR_NO_ECHO ? 0.0 : r.mm / 1000.0;
+  temp_.integrate(sensor, ss.half, d, sonar_geom_.max_range, r.t, lop_);
+  obst_cache_t_ = -1e9;
+  if (cfg_.obstacles.static_layer) {
+    std::lock_guard<std::mutex> lk(m_);
+    if (mode_ == Mode::Mapping && localized_ && has_last_kf_ && last_kf_id_ >= 0 && last_kf_id_ < int(kfs_.size())) {
+      const Pose2 rel = last_kf_odom_.inverse() * sensor;
+      SonarObs o;
+      o.kf = last_kf_id_;
+      o.rx = float(rel.x), o.ry = float(rel.y), o.rth = float(rel.th);
+      o.half = float(ss.half);
+      o.d = float(d);
+      o.max_range = float(sonar_geom_.max_range);
+      static_.add(o, kfs_[last_kf_id_], lop_);
+    }
+  }
+  if (r.t - last_prune_t_ > 2.0) {
+    last_prune_t_ = r.t;
+    temp_.prune(ekf_.pose().t(), cfg_.obstacles.temp_window, r.t);
+  }
+}
+
+double SlamSystem::clearFront() const {
+  if (!sonar_geom_.valid()) return 1e9;
+  std::vector<double> d(sonar_geom_.sensors.size(), -1);
+  for (size_t k = 0; k < d.size() && k < sonar_last_.size(); k++) {
+    const auto &sl = sonar_last_[k];
+    if (t_ - sl.t <= cfg_.sonar.fresh_s && sl.mm != SONAR_FAULT && sl.mm != SONAR_NO_ECHO) d[k] = sl.mm / 1000.0;
+  }
+  const double c = frontClearance(sonar_geom_, d, cfg_.sonar.corridor);
+  return std::isfinite(c) ? c : 1e9;
+}
+
+std::vector<Eigen::Vector2d> SlamSystem::obstaclesStatic() const {
+  std::lock_guard<std::mutex> lk(m_);
+  return static_.occupied(lop_.locc);
+}
+
+std::vector<Eigen::Vector2d> SlamSystem::obstaclesTemp() const {
+  Pose2 mo;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    mo = T_map_odom_;
+  }
+  std::vector<Eigen::Vector2d> out = temp_.occupied(t_, lop_.locc);
+  for (auto &p : out) p = mo * p;
+  return out;
+}
+
+size_t SlamSystem::staticObsCount() const {
+  std::lock_guard<std::mutex> lk(m_);
+  return static_.obs().size();
+}
+
+const std::vector<Eigen::Vector2d> &SlamSystem::obstaclePointsMap() {
+  if (t_ - obst_cache_t_ < 0.2) return obst_cache_;
+  obst_cache_ = obstaclesStatic();
+  const auto tmp = obstaclesTemp();
+  obst_cache_.insert(obst_cache_.end(), tmp.begin(), tmp.end());
+  obst_cache_t_ = t_;
+  return obst_cache_;
+}
+
+bool SlamSystem::pathBlockedNow(const Pose2 &robot_map) {
+  const auto &wps = ctrl_.waypoints();
+  if (wps.empty() || ctrl_.state() == "final_rotate") return false;
+  const auto &obst = obstaclePointsMap();
+  if (obst.empty()) return false;
+  std::vector<Eigen::Vector2d> poly{robot_map.t()};
+  double len = 0;
+  size_t k = std::min(ctrl_.index(), wps.size() - 1);
+  for (; k < wps.size() && len < cfg_.obstacles.check_ahead; k++) {
+    len += (wps[k] - poly.back()).norm();
+    poly.push_back(wps[k]);
+  }
+  return pathBlockedAt(poly, obst, cfg_.obstacles.inflate, k == wps.size()) >= 0;
+}
+
+void SlamSystem::emitObstacles() {
+  last_obst_emit_t_ = t_;
+  const auto st = obstaclesStatic();
+  const auto tp = obstaclesTemp();
+  if (st.empty() && tp.empty() && !obst_emitted_nonempty_) return;
+  obst_emitted_nonempty_ = !(st.empty() && tp.empty());
+  auto arr = [](const std::vector<Eigen::Vector2d> &v) {
+    std::string s = "[";
+    const size_t n = std::min<size_t>(v.size(), 4000);
+    for (size_t i = 0; i < n; i++) s += (i ? ",[" : "[") + jnum(v[i].x(), 3) + "," + jnum(v[i].y(), 3) + "]";
+    return s + "]";
+  };
+  emit("{\"type\":\"obstacles\",\"res\":" + jnum(cfg_.obstacles.resolution, 3) + ",\"inflate\":" +
+       jnum(cfg_.obstacles.inflate, 3) + ",\"static\":" + arr(st) + ",\"temp\":" + arr(tp) + "}");
 }
 
 void SlamSystem::command(const std::string &line) {
@@ -599,7 +797,33 @@ void SlamSystem::command(const std::string &line) {
     nav_label_.clear();
     mission_pts_.clear();
     leg_ends_.clear();
+    route_goals_.clear();
+    leg_offset_ = 0;
     emitPath();
+  } else if (cmd == "obst_erase") {
+    double x, y, r;
+    if (!(ss >> x >> y >> r) || !std::isfinite(x) || !std::isfinite(y) || !(r > 0 && r < 2)) {
+      reply(cmd, false, "Cần: obst_erase x y r");
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      static_.erase({x, y}, r, lop_);
+    }
+    Pose2 mo;
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      mo = T_map_odom_;
+    }
+    temp_.eraseDisc(mo.inverse() * Eigen::Vector2d(x, y), r, lop_.lmin);
+    obst_cache_t_ = -1e9;
+    last_obst_emit_t_ = -1e9;
+    reply(cmd, true, "Đã tẩy vật cản quanh (" + jnum(x, 2) + ", " + jnum(y, 2) + ")");
+  } else if (cmd == "obst_clear_temp") {
+    temp_.clear();
+    obst_cache_t_ = -1e9;
+    last_obst_emit_t_ = -1e9;
+    reply(cmd, true, "Đã xoá vật cản tạm");
   } else if (cmd == "status") {
     // publish* chỉ đọc dữ liệu dưới khoá: gọi từ luồng chính là an toàn
     publishGraph();
@@ -684,15 +908,34 @@ void SlamSystem::emitState() {
        ",\"womega\":[" + std::to_string(wo_ok_) + "," + std::to_string(wo_rej_) + "]" +
        ",\"odom_resets\":" + std::to_string(wo_.resets()) + "}";
   s += ",\"pitch\":" + jnum(rad2deg(pitch_), 2) + ",\"busy\":" + jbool(img_inflight_);
+  {
+    const double cf = clearFront();
+    size_t nst, nobs;
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      nst = static_.occupied(lop_.locc).size();
+      nobs = static_.obs().size();
+    }
+    s += ",\"sonar\":{\"n\":" + std::to_string(sonar_geom_.sensors.size()) +
+         ",\"clear\":" + (std::isfinite(cf) && cf < 1e8 ? jnum(cf, 3) : std::string("null")) +
+         ",\"temp\":" + std::to_string(temp_.occupied(t_, lop_.locc).size()) + ",\"static\":" + std::to_string(nst) +
+         ",\"static_obs\":" + std::to_string(nobs) + "}";
+  }
   s += ",\"nav\":{\"state\":" + jstr(st) + ",\"reason\":" + jstr(ctrl_.reason()) + ",\"label\":" + jstr(nav_label_);
   if (!ctrl_.waypoints().empty()) {
     const auto &g = ctrl_.waypoints().back();
     s += ",\"goal\":[" + jnum(g.x()) + "," + jnum(g.y()) + "],\"wp\":[" + std::to_string(ctrl_.index()) + "," +
          std::to_string(ctrl_.waypoints().size()) + "]";
   }
-  if (!leg_ends_.empty())
-    s += ",\"leg\":[" + std::to_string(std::min(currentLeg() + (ctrl_.state() == "arrived" ? 0 : 1), int(leg_ends_.size()))) +
-         "," + std::to_string(leg_ends_.size()) + "]";
+  if (!leg_ends_.empty()) {
+    const int total = int(std::max(route_goals_.size(), leg_ends_.size()));
+    const int leg = leg_offset_ + currentLeg() + (ctrl_.state() == "arrived" ? 0 : 1);
+    s += ",\"leg\":[" + std::to_string(std::min(leg, total)) + "," + std::to_string(total) + "]";
+  }
+  if (ctrl_.state() == "blocked")
+    s += ",\"blocked\":{\"t\":" + jnum(ctrl_.blockedFor(t_), 1) + ",\"scan\":" + std::to_string(ctrl_.scanPhase()) +
+         ",\"next_replan\":" + jnum(ctrl_.nextReplanIn(t_), 1) + ",\"cause\":" + jstr(ctrl_.blockCause()) + "}";
+  s += ",\"replans\":" + std::to_string(replans_);
   s += ",\"v_max\":" + jnum(cfg_.controller.v_max, 2) + ",\"w_max\":" + jnum(cfg_.controller.w_max, 2);
   if (ctrl_.active())
     s += ",\"remaining\":" + jnum(ctrl_.remaining(), 2) + ",\"herr_deg\":" + jnum(rad2deg(ctrl_.headingError()), 1) +
@@ -1003,6 +1246,7 @@ void SlamSystem::doKeyframe(Job &j) {
     if (h_samples_.size() > 400) h_samples_.erase(h_samples_.begin(), h_samples_.begin() + 100);
     has_last_kf_ = true;
     last_kf_odom_ = kf.T_odom;
+    last_kf_id_ = kf.id;
     kf_reject_streak_ = 0;
     if (new_vis.empty()) {
       T_map_odom_ = kf.T_map * kf.T_odom.inverse();
@@ -1074,6 +1318,7 @@ void SlamSystem::optimizeGraph(const std::vector<size_t> &new_vis, const OdomSna
       pl.x = p.x, pl.y = p.y;
       if (pl.has_th) pl.th = p.th;
     }
+  static_.rebuild(kfs_, lop_);   // số đo siêu âm neo keyframe: dời theo keyframe
   const int last = lastKfOfSession();
   if (last >= 0 && localized_) {
     T_map_odom_ = kfs_[last].T_map * kfs_[last].T_odom.inverse();
@@ -1250,6 +1495,7 @@ void SlamSystem::doLocalize(Job &j) {
     vis_edges_.push_back(e);
     has_last_kf_ = true;
     last_kf_odom_ = kf.T_odom;
+    last_kf_id_ = kf.id;
     auto it = std::find_if(path_pending_.begin(), path_pending_.end(),
                            [&](const std::pair<double, Pose2> &p) { return p.first > kf.stamp; });
     path_pending_.erase(path_pending_.begin(), it);
@@ -1318,6 +1564,8 @@ void SlamSystem::doNewMap(Job &j) {
     places_.clear();
     path_pending_.clear();
     grid_ = TraversedGrid();
+    static_.clear();
+    last_kf_id_ = -1;
     mode_ = Mode::Mapping;
     map_id_.clear();
     map_name_ = "(chưa lưu)";
@@ -1335,6 +1583,7 @@ void SlamSystem::doNewMap(Job &j) {
     ++grid_version_;
     ++graph_version_;
   }
+  temp_reset_ = true;
   publishGraph();
   publishGrid();
   publishPlaces();
@@ -1369,6 +1618,9 @@ void SlamSystem::doLoadMap(Job &j) {
     odom_slip_.assign(odom_edges_.size(), false);
     vis_edges_ = std::move(m.vis);
     places_ = std::move(m.places);
+    static_.setData(m.obstacles.obs(), m.obstacles.erasures());
+    static_.rebuild(kfs_, lop_);
+    last_kf_id_ = -1;
     loaded_height_ = m.height_est;
     h_samples_.clear();
     int maxs = 0;
@@ -1386,6 +1638,7 @@ void SlamSystem::doLoadMap(Job &j) {
     slips_ = rejected_loops_ = 0;
     ++graph_version_;
   }
+  temp_reset_ = true;
   rebuildGrid();
   publishGraph();
   publishGrid();
@@ -1417,6 +1670,12 @@ void SlamSystem::doSaveMap(Job &j) {
     m.places = places_;
     m.height_est = heightUsedLocked();
     g = grid_;
+    m.obstacles = static_;
+    if (!g.empty()) {
+      const cv::Mat occ = obstacleMask(g, static_.occupied(lop_.locc), 0);
+      m.obstacle_png = cv::Mat(g.ny, g.nx, CV_8U, cv::Scalar(255));
+      m.obstacle_png.setTo(0, occ);
+    }
     double len = 0;
     for (const auto &k : kfs_)
       for (size_t i = 1; i < k.path_rel.size(); i++)
@@ -1430,7 +1689,8 @@ void SlamSystem::doSaveMap(Job &j) {
            jstr(tbuf) + ",\"keyframes\":" + std::to_string(kfs_.size()) + ",\"loops\":" + std::to_string(lp) +
            ",\"length_m\":" + jnum(len, 2) + ",\"area_m2\":" +
            jnum(double(g.freeCells()) * g.res * g.res, 2) + ",\"places\":" + std::to_string(places_.size()) +
-           ",\"ceiling_height\":" + jnum(m.height_est, 3) + ",\"quality\":" + qualityJson() + "}";
+           ",\"ceiling_height\":" + jnum(m.height_est, 3) + ",\"sonar_obs\":" + std::to_string(static_.obs().size()) +
+           ",\"quality\":" + qualityJson() + "}";
   }
   std::string cfgtxt = cfg_.source_text + "\n# ceiling_height dùng khi lưu: " + jnum(m.height_est, 3) + "\n";
   std::string err;

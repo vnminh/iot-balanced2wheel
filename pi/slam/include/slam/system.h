@@ -27,6 +27,8 @@
 #include "slam/keyframe.h"
 #include "slam/map_io.h"
 #include "slam/matcher.h"
+#include "slam/obstacle_grid.h"
+#include "slam/sonar.h"
 #include "slam/pose_graph.h"
 #include "slam/protocol.h"
 #include "slam/traversed_grid.h"
@@ -52,11 +54,14 @@ public:
 
   void onMcu(const McuRecord &m);
   void onImage(double t, const cv::Mat &gray);
+  void onSonar(const SonarRecord &r);                 // bản ghi 'S'
+  void onSonarGeom(const uint8_t *d, size_t n);       // bản ghi 'G' (bảng vị trí cảm biến do ESP32 gửi)
   // Lệnh text (một dòng):
   //   goto <x> <y> [theta_deg]   goto_place <tên>   mission <x1> <y1> <x2> <y2> ...   cancel [lý do]   nav_clear
   //   new_map   load_map <id> [localization|mapping]   save_map <id> <tên hiển thị>
   //   set_mode localization|mapping   save_place <tên>   delete_place <tên>
   //   reloc   calib_ref   calib_measure   status
+  //   obst_erase <x> <y> <r>   obst_clear_temp
   void command(const std::string &line);
   void wallTick(double now);   // chạy thật: kiểm tra mất dữ liệu MCU
   void flush();                // chờ worker làm hết việc đang xếp hàng
@@ -66,7 +71,13 @@ public:
   bool navActive() const { return ctrl_.active(); }
   std::string navState() const { return ctrl_.state(); }
   std::string navReason() const { return ctrl_.reason(); }
-  int missionLeg() const { return currentLeg(); }
+  int missionLeg() const { return leg_offset_ + currentLeg(); }
+  int replans() const { return replans_; }
+  double clearFront() const;
+  std::vector<Eigen::Vector2d> obstaclesStatic() const;
+  std::vector<Eigen::Vector2d> obstaclesTemp() const;   // frame map
+  size_t staticObsCount() const;
+  const SonarGeometry &sonarGeometry() const { return sonar_geom_; }
   Pose2 odomPose() const { return ekf_.pose(); }
   Pose2 mapPose() const;
   bool localized() const;
@@ -128,6 +139,18 @@ private:
   void controlTick(double dt);
   void startRoute(const std::vector<Eigen::Vector2d> &goals, std::optional<double> theta, const std::string &label,
                   const char *cmd);
+  struct Route {
+    std::vector<Eigen::Vector2d> wps, snapped;
+    std::vector<size_t> ends;
+    double length = 0, max_snap = 0;
+  };
+  // A* qua lần lượt các điểm trên vùng đã đi TRỪ ô vật cản (đã phình); bad_leg = chặng lỗi
+  bool planRoute(const TraversedGrid &g0, const Pose2 &start, const std::vector<Eigen::Vector2d> &goals,
+                 double start_snap, Route &r, std::string &why, int &bad_leg);
+  void replanFromHere();
+  const std::vector<Eigen::Vector2d> &obstaclePointsMap();   // tĩnh + tạm (frame map), cache 0,2 s
+  bool pathBlockedNow(const Pose2 &robot_map);
+  void emitObstacles();
   int currentLeg() const;
   void emitState();
   void emitCmd(const ControlOutput &c);
@@ -205,6 +228,28 @@ private:
   std::vector<Eigen::Vector2d> mission_pts_;   // điểm nhiệm vụ (đã dời vào vùng đã đi), trống = goto 1 điểm
   std::vector<size_t> leg_ends_;               // chỉ số waypoint cuối của từng chặng
   int last_leg_ = 0;
+  std::vector<Eigen::Vector2d> route_goals_;   // điểm đích gốc của goto / nhiệm vụ (để lập lại đường)
+  std::optional<double> route_theta_;
+  int leg_offset_ = 0;                          // số chặng đã xong trước lần lập lại đường gần nhất
+  int replans_ = 0;
+  std::string last_replan_why_;
+  double last_replan_warn_t_ = -1e9;
+
+  // ----- siêu âm / vật cản (luồng chính)
+  SonarGeometry sonar_geom_;
+  struct SonarLast {
+    double t = -1e9;
+    uint16_t mm = SONAR_FAULT;
+    bool has_int = false;
+    Pose2 last_int;            // tư thế cảm biến (odom) lần đưa vào lưới gần nhất
+  };
+  std::vector<SonarLast> sonar_last_;
+  LogOddsParams lop_;
+  LogOddsGrid temp_;            // lớp tạm, frame odom
+  std::atomic<bool> temp_reset_{false};
+  double last_prune_t_ = -1e9, last_obst_emit_t_ = -1e9, obst_cache_t_ = -1e9;
+  std::vector<Eigen::Vector2d> obst_cache_;
+  bool obst_emitted_nonempty_ = false;
   std::atomic<bool> rel_reset_{false};
 
   // ----- dữ liệu bản đồ (worker ghi dưới m_, luồng chính đọc dưới m_)
@@ -227,6 +272,8 @@ private:
   std::vector<std::pair<double, Pose2>> path_pending_;
   TraversedGrid grid_;
   int grid_version_ = 0, graph_version_ = 0;
+  StaticObstacles static_;      // lớp tĩnh, frame map (neo keyframe)
+  int last_kf_id_ = -1;
   std::vector<double> h_samples_;
   double loaded_height_ = 0;
   bool hyp_valid_ = false;

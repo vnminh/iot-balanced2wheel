@@ -19,8 +19,9 @@ struct PlanResult {
   double goal_snap = 0, start_snap = 0;    // m đã dời
 };
 
+// start_snap > 0: giới hạn dời điểm đầu (lập lại đường khi bị chặn), ngược lại dùng cfg.max_snap
 PlanResult planPath(const TraversedGrid &g, const Eigen::Vector2d &start, const Eigen::Vector2d &goal,
-                    const PlannerCfg &cfg, double center_tol);
+                    const PlannerCfg &cfg, double center_tol, double start_snap = -1);
 
 // Ô trống gần nhất trong bán kính max_dist (m). false nếu không có.
 bool nearestFree(const TraversedGrid &g, const Eigen::Vector2d &p, double max_dist, int &ci, int &cj);

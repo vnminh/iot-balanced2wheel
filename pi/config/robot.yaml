@@ -27,6 +27,23 @@ drive:                  # giới hạn lệnh (tay và goto); firmware còn ch�
   max_speed: 0.20       # m/s
   max_turn: 0.10        # m/s chênh lệch mỗi bánh khi quay (goto: ω 1 rad/s = 0.085)
   timeout_s: 0.4        # lâu không có lệnh mới -> dừng xe
+  # Siêu âm (vị trí cảm biến do ESP32 gửi): giảm tốc khi TIẾN cho mọi nguồn lệnh. ESP32 còn dừng khẩn riêng.
+  sonar_stop: 0.15      # m khoảng trống phía trước: không cho tiến
+  sonar_slow: 0.50      # m: bắt đầu giảm tốc
+  sonar_corridor: 0.15  # m nửa bề rộng hành lang thân xe
+  sonar_fresh_s: 0.5    # số đo cũ hơn coi như thiếu dữ liệu (chạy tối đa nửa tốc độ)
+
+voice:                  # lệnh giọng nói từ Speech-control (ws://127.0.0.1:8080/ws/voice), robot/voice.py
+  enable: true
+  v_max: 0.10           # m/s khi tiến/lùi theo giọng nói
+  w_max: 0.8            # rad/s khi xoay (~46°/s)
+  max_distance_m: 3.0   # một lệnh tiến/lùi tối đa
+  max_angle_deg: 720
+  queue_max: 5          # nói nhiều lệnh liền -> xếp hàng
+  web_hold_s: 2.0       # web vừa lái tay trong khoảng này -> bỏ qua giọng nói (web ưu tiên)
+  tol_m: 0.005          # sai số chấp nhận
+  tol_deg: 2.0
+  turn_source: gyro     # gyro (bù bias khi đứng yên) | wheels (cần wheel_base đúng)
 
 web:
   host: 0.0.0.0

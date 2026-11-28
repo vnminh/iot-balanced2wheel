@@ -5,6 +5,8 @@
 //                       └─► t (quay) ─────────────────────────────────────────── cộng vi sai ─┘
 //
 //  Mỗi 2 chu kỳ (200 Hz) gửi sang Pi: mẫu IMU thô + tổng số bước 2 bánh + góc chúi.
+//  Siêu âm (sonar.cpp): mỗi số đo một khung SONAR; có vật sát phía trước thì chặn lệnh TIẾN ngay tại đây
+//  (vẫn cho lùi / xoay), không phụ thuộc Pi.
 //  Số bước là số bước RA LỆNH (không encoder): Pi dùng làm odometry bánh xe cho SLAM 2D,
 //  còn trượt bước / kẹt bánh thì SLAM phát hiện bằng ảnh trần (pi/slam).
 //
@@ -18,6 +20,7 @@
 #include "config.h"
 #include "imu.h"
 #include "link.h"
+#include "sonar.h"
 #include "steppers.h"
 
 enum State : uint8_t { CALIBRATING = 0, WAITING = 1, BALANCING = 2 };
@@ -42,6 +45,7 @@ uint8_t telemDiv = 0;
 // Lúc đó động cơ bước dễ TRƯỢT BƯỚC: số bước đã ra lệnh không còn đúng quãng đường bánh lăn,
 // Pi (slam_node) tăng nhiễu odometry bánh khi thấy cờ này.
 bool satLatch = false;
+int sonarBlock = -1;      // cảm biến đang chặn lệnh tiến (-1 = không)
 
 constexpr float STEP_SPEED_LIMIT = MAX_STEP_RATE / STEPS_PER_METER;
 constexpr float SPEED_LIMIT = MAX_SPEED_MPS < STEP_SPEED_LIMIT ? MAX_SPEED_MPS : STEP_SPEED_LIMIT;
@@ -150,7 +154,16 @@ void controlStep(float dt) {
   // speedInt = quãng đường đã trôi so với điểm giữ. Đổi lệnh thì xoá, nếu không
   // dừng lại xe sẽ chạy ngược về điểm xuất phát.
   if (Link::consumeTargetChanged()) speedInt = 0;
-  const float cmdSpeed = Link::speed();
+  float cmdSpeed = Link::speed();
+  // Dừng khẩn bằng siêu âm: chỉ chặn chiều TIẾN
+  const int blk = cmdSpeed > 0 ? Sonar::blockingSensor() : -1;
+  if ((blk >= 0) != (sonarBlock >= 0)) {
+    speedInt = 0;   // đổi đích tốc độ đột ngột: xoá tích phân như khi đổi lệnh
+    if (blk >= 0) Link::sendText("SONAR:STOP %d %u", blk, Sonar::lastMm(blk));
+    else Link::sendText("SONAR:CLEAR");
+  }
+  sonarBlock = blk;
+  if (blk >= 0) cmdSpeed = 0;
   const float cmdTurn = Link::turn();
 
   // --- Vòng ngoài: PI tốc độ -> góc đặt ---
@@ -219,9 +232,11 @@ void setup() {
   pinMode(PIN_LED, OUTPUT);
   Steppers::begin();  // EN = HIGH -> động cơ tắt
   Link::begin();
+  Sonar::begin();
   delay(300);
-  Link::log("%s: xe can bang + SLAM 2D | %.2f m/s, %.1f m/s2 | UART%d RX=%d TX=%d @%d | IMU %d Hz", FW_VERSION,
-            SPEED_LIMIT, MAX_ACCEL_MPS2, LINK_UART, PIN_LINK_RX, PIN_LINK_TX, LINK_BAUD, LOOP_HZ / TELEM_DIV);
+  Link::log("%s: xe can bang + SLAM 2D | %.2f m/s, %.1f m/s2 | UART%d RX=%d TX=%d @%d | IMU %d Hz | sieu am %d", FW_VERSION,
+            SPEED_LIMIT, MAX_ACCEL_MPS2, LINK_UART, PIN_LINK_RX, PIN_LINK_TX, LINK_BAUD, LOOP_HZ / TELEM_DIV,
+            Sonar::count());
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
   Wire.setClock(400000);
@@ -237,6 +252,7 @@ void setup() {
               found[0] ? found : " (khong co thiet bi nao)");
     digitalWrite(PIN_LED, !digitalRead(PIN_LED));
     Link::poll();
+    Sonar::poll();
     delay(1000);
   }
 
@@ -250,6 +266,8 @@ void setup() {
 
 void loop() {
   Link::poll();
+  Sonar::poll();
+  if (Link::consumeInfoRequest()) Sonar::sendGeometry();
 
   constexpr uint32_t PERIOD_US = 1000000UL / LOOP_HZ;
   static uint32_t lastUs = micros();

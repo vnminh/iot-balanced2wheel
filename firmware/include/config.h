@@ -7,6 +7,7 @@
 //   1. Giữ thăng bằng (PID tầng 400 Hz, giống bản cũ).
 //   2. Nhận lệnh vận tốc từ Raspberry Pi qua UART2.
 //   3. Gửi sang Pi luồng IMU + số bước 2 bánh + góc chúi 200 Hz (odometry cho SLAM 2D).
+//   4. Đọc các cảm biến siêu âm HC-SR04, dừng khẩn khi có vật sát phía trước, gửi số đo + vị trí lắp sang Pi.
 //
 //  Sửa thông số trong file này cho khớp với xe.
 // =============================================================================
@@ -39,6 +40,26 @@
 #define PIN_LINK_TX        17
 #endif
 #define LINK_BAUD          460800  // phải khớp pi/config/robot.yaml (serial.baud)
+
+// --------------------------- SIÊU ÂM HC-SR04 (firmware 2.2) -----------------
+// Mỗi dòng một cảm biến, theo thứ tự (chỉ số 0, 1, 2...). Thêm / bớt / dời cảm biến: sửa bảng này rồi nạp lại.
+// Pi KHÔNG có cấu hình vị trí cảm biến: ESP32 gửi bảng này lên (khung SONAR_GEOM lúc khởi động, mỗi 2 s và khi
+// Pi gửi INFO), robotd + slam_node dùng đúng như vậy.
+//
+//   { TRIG, ECHO, x_mm, y_mm, hướng_độ, nửa_góc_chùm_độ, dừng_khẩn_mm }
+//   x_mm, y_mm : vị trí cảm biến so với TÂM TRỤC BÁNH, x tới trước, y sang TRÁI
+//   hướng_độ   : trục chùm so với hướng xe, + = sang trái
+//   dừng_khẩn  : lệnh TIẾN bị chặn khi cảm biến này đo gần hơn (0 = không dùng để dừng)
+// HC-SR04 cấp 5 V: ECHO phải qua cầu chia áp 1k / 2k xuống 3,3 V. ECHO nên dùng chân chỉ-vào 34/35/36/39 hoặc
+// chân trống bất kỳ; TRIG chân ra bất kỳ (không trùng chân đã dùng ở trên, tránh 0, 2, 12, 15 lúc khởi động).
+#define SONAR_SENSORS                 \
+  {32, 34,  80,  50,  40, 15, 120},   \
+  {33, 35,  90,   0,   0, 15, 150},   \
+  { 4, 23,  80, -50, -40, 15, 120}
+#define SONAR_MAX_RANGE_MM  2000      // xa hơn coi như "không có vang"
+#define SONAR_GAP_US        5000      // nghỉ giữa 2 lần phát (chờ tiếng dội tắt, chống nhiễu chéo)
+#define SONAR_FRESH_MS      300       // số đo cũ hơn không dùng để dừng khẩn
+#define SONAR_GEOM_PERIOD_MS 2000     // gửi lại bảng vị trí cảm biến
 
 // ------------------------------- CƠ KHÍ -------------------------------------
 #define MOTOR_FULL_STEPS   200      // 1.8 độ/bước
@@ -111,4 +132,4 @@
 // ------------------------------- SUY RA -------------------------------------
 #define STEPS_PER_REV      (MOTOR_FULL_STEPS * MICROSTEP)
 #define STEPS_PER_METER    (STEPS_PER_REV / (3.14159265f * WHEEL_DIAMETER_M))
-#define FW_VERSION         "iot-ck-2.1"   // 2.1: gói IMU 32 byte (+ pitch)
+#define FW_VERSION         "iot-ck-2.2"   // 2.1: gói IMU 32 byte (+ pitch); 2.2: siêu âm (khung SONAR, SONAR_GEOM)

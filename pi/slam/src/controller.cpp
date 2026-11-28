@@ -20,6 +20,23 @@ void Controller::start(const std::vector<Eigen::Vector2d> &wps, std::optional<do
   t0_ = t;
   best_ = 1e18;
   best_t_ = t;
+  replan_req_ = false;
+  hold_t_ = look_until_ = -1;
+  scan_phase_ = 0;
+  blk_cause_.clear();
+}
+
+void Controller::enterBlocked(const ControlInput &in, const std::string &cause) {
+  state_ = "blocked";
+  blk_cause_ = cause;
+  blk_t0_ = in.t;
+  replan_due_ = in.t + cfg_.block_wait_s;
+  replan_req_ = false;
+  scan_phase_ = 0;
+  scan_ref_ = in.odom.th;
+  hold_t_ = -1;
+  v_ = 0;   // xe chậm: dừng ngay (firmware còn làm mượt 0,4 m/s²)
+  w_ = 0;
 }
 
 void Controller::cancel(const std::string &reason) {
@@ -81,6 +98,43 @@ ControlOutput Controller::tick(const ControlInput &in, double dt) {
       break;
     }
   }
+  // --- Bị chặn: quét, chờ, xin lập lại đường ---
+  if (state_ == "blocked") {
+    remaining_ = (wp(std::min(idx_, wps_.size() - 1)) - p).norm();
+    if (in.t - blk_t0_ > c.max_block_s) {
+      std::snprintf(buf, sizeof buf, "Đường bị vật cản chặn quá %.0f s", c.max_block_s);
+      cancel(buf);
+      return out;
+    }
+    double w = 0;
+    if (scan_phase_ < 3) {   // 0: quay +scan, 1: quay −scan, 2: về hướng cũ
+      const double tgt = scan_ref_ + (scan_phase_ == 0 ? 1 : scan_phase_ == 1 ? -1 : 0) * deg2rad(c.scan_deg);
+      const double e = wrapAngle(tgt - th);
+      herr_ = e;
+      if (std::fabs(e) < deg2rad(4)) {
+        ++scan_phase_;
+      } else {
+        w = std::clamp(c.k_rot * e, -0.6 * c.w_max, 0.6 * c.w_max);
+        if (std::fabs(w) < c.w_min_rotate) w = std::copysign(c.w_min_rotate, e);
+      }
+    } else if (!in.path_blocked && in.clear_front > c.stop_dist + 0.05) {
+      state_ = "following";   // vật đã đi / không chặn thật: đi tiếp đường cũ
+      best_ = 1e18;
+      best_t_ = in.t;
+      look_until_ = in.t + c.look_pause_s;
+      out.active = true;
+      return out;
+    } else if (in.t >= replan_due_ && !replan_req_) {
+      replan_req_ = true;     // SlamSystem chạy lại A*
+    }
+    const double dw = c.acc_w * dt;
+    w_ += std::clamp(w - w_, -dw, dw);
+    v_ = 0;
+    out.w = w_;
+    out.active = true;
+    return out;
+  }
+
   const Eigen::Vector2d goal = wp(wps_.size() - 1);
   const double goal_dist = (goal - p).norm();
   remaining_ = (wp(idx_) - p).norm();
@@ -127,19 +181,46 @@ ControlOutput Controller::tick(const ControlInput &in, double dt) {
     const double e = wrapAngle(std::atan2(d.y(), d.x()) - th);
     herr_ = e;
     if (state_ == "following" && std::fabs(e) > deg2rad(c.rotate_in_place_deg)) state_ = "rotating";
-    if (state_ == "rotating" && std::fabs(e) < deg2rad(c.rotate_exit_deg)) state_ = "following";
+    if (state_ == "rotating" && std::fabs(e) < deg2rad(c.rotate_exit_deg)) {
+      state_ = "following";
+      look_until_ = in.t + c.look_pause_s;   // siêu âm chỉ nhìn phía trước: đo hướng mới rồi mới tiến
+    }
     if (state_ == "rotating") {
       w = std::clamp(c.k_rot * e, -c.w_max, c.w_max);
       if (std::fabs(w) < c.w_min_rotate) w = std::copysign(c.w_min_rotate, e);
     } else {
       const double Ld = std::max(d.norm(), 1e-3);
       v = std::clamp(c.k_v_goal * remaining_, c.v_min, c.v_max);   // chỉ chậm lại ở đích cuối
+      // Siêu âm: giảm tốc theo khoảng trống phía trước
+      if (in.clear_front < c.slow_dist)
+        v = std::min(v, c.v_max * std::max(0.0, (in.clear_front - c.stop_dist) / (c.slow_dist - c.stop_dist)));
+      if (in.t < look_until_) v = 0;
       const double kappa = 2.0 * std::sin(e) / Ld;
       w = kappa * v;
       if (std::fabs(w) > c.w_max) {
         w = std::copysign(c.w_max, w);
         v = std::fabs(w / kappa);
       }
+      if (v <= 1e-4) w = (in.t < look_until_) ? 0 : w;   // đang dừng vì siêu âm: không quay theo cung
+    }
+  }
+
+  // --- Phát hiện bị chặn (chỉ khi đang bám đường, chưa tới đích) ---
+  if (state_ == "following" || state_ == "rotating") {
+    if (in.path_blocked) {
+      enterBlocked(in, "Vật cản trên đường phía trước");
+      out.active = true;   // vẫn đang goto (đứng yên), không phải kết thúc
+      return out;
+    }
+    if (state_ == "following" && in.clear_front < c.stop_dist + 0.02 && in.t >= look_until_) {
+      if (hold_t_ < 0) hold_t_ = in.t;
+      if (in.t - hold_t_ > c.hold_block_s) {
+        enterBlocked(in, "Siêu âm: vật sát phía trước");
+        out.active = true;
+        return out;
+      }
+    } else {
+      hold_t_ = -1;
     }
   }
 

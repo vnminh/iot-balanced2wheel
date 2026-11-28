@@ -29,7 +29,8 @@ echo "==> Copy code lên $PI:~/iot-ck"
 rsync -az --info=stats1 \
   --exclude .git/ --exclude .venv/ --exclude .vscode/ --exclude __pycache__/ --exclude '*.pyc' \
   --exclude firmware/.pio/ --exclude pi/slam/build/ --exclude .build-slam/ --exclude maps/ --exclude logs/ \
-  --exclude '*.slamlog' \
+  --exclude '*.slamlog' --exclude Speech-control/models/ --exclude Speech-control/.venv/ \
+  --exclude firmware-mic/.pio/ --exclude firmware-mic/include/secrets.h --exclude '.build-slam*/' \
   "$ROOT/" "$PI:iot-ck/"
 
 # File của hệ OpenVINS cũ đã xoá khỏi repo: xoá luôn trên Pi (rsync không --delete nên không tự xoá)
@@ -48,6 +49,10 @@ else
                systemctl --user restart robotd && echo "==> Đã restart robotd";
              else
                echo "==> robotd chưa cài service. Chạy: ./scripts/deploy_pi.sh --install";
+             fi
+             if systemctl --user is-enabled --quiet voice 2>/dev/null; then
+               cp ~/iot-ck/Speech-control/voice.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+               systemctl --user restart voice && echo "==> Đã restart voice (giọng nói)";
              fi'
 fi
 echo "Web: http://${PI#*@}:8080"
