@@ -1,0 +1,1330 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>Balanced Car Pipeline</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Bố cục: sơ đồ khối trên khung phần cứng + bảng giải thích; bên dưới là hình chi tiết bản đồ log-odds. */
+  :root {
+    --bg: #eef2f0; --surface: #ffffff; --ink: #17201d; --muted: #5b6863; --line: #c3ccc8; --node: #fbfcfb;
+    --esp: #0d7a70; --esp-tint: rgba(13,122,112,.06); --pi: #b02f57; --pi-tint: rgba(176,47,87,.05);
+    --web: #4a5a8a; --web-tint: rgba(74,90,138,.06); --proc: #3e4a46;
+    --f-pid: #d2501a; --f-manual: #2f69b3; --f-slam: #2c8350; --f-goto: #6c48c4; --f-obst: #b5780f; --f-voice: #0b8aa6;
+    --occ: #c4322f; --cand: #f0a24a; --free: #8fb4c9; --truth: #17201d;
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+    --cond: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #101614; --surface: #171f1c; --ink: #e2eae7; --muted: #94a39d; --line: #34423d; --node: #1b2421;
+    --esp: #4fcabd; --esp-tint: rgba(79,202,189,.07); --pi: #f07a9c; --pi-tint: rgba(240,122,156,.06);
+    --web: #9aa9da; --web-tint: rgba(154,169,218,.07); --proc: #b5c2bd;
+    --f-pid: #ff8a55; --f-manual: #74a8f0; --f-slam: #5fcf8a; --f-goto: #a98cf5; --f-obst: #f1b84a; --f-voice: #4fd0ea;
+    --occ: #ff6b5e; --cand: #c98a3a; --free: #3f6278; --truth: #e2eae7;
+    color-scheme: dark; } }
+  :root[data-theme="dark"] {
+    --bg: #101614; --surface: #171f1c; --ink: #e2eae7; --muted: #94a39d; --line: #34423d; --node: #1b2421;
+    --esp: #4fcabd; --esp-tint: rgba(79,202,189,.07); --pi: #f07a9c; --pi-tint: rgba(240,122,156,.06);
+    --web: #9aa9da; --web-tint: rgba(154,169,218,.07); --proc: #b5c2bd;
+    --f-pid: #ff8a55; --f-manual: #74a8f0; --f-slam: #5fcf8a; --f-goto: #a98cf5; --f-obst: #f1b84a; --f-voice: #4fd0ea;
+    --occ: #ff6b5e; --cand: #c98a3a; --free: #3f6278; --truth: #e2eae7;
+    color-scheme: dark; }
+
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); }
+  .wrap { max-width: 1480px; margin: 0 auto; padding-block: 20px 40px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  header { display: grid; gap: 6px; margin-bottom: 14px; }
+  h1 { font: 600 22px/1.2 var(--cond); margin: 0; letter-spacing: .01em; text-wrap: balance; }
+  h2.sec { font: 600 19px/1.25 var(--cond); margin: 34px 0 6px; text-wrap: balance; }
+  .lede { color: var(--muted); max-width: 92ch; margin: 0; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  .flows { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 14px; }
+  .flows button, .seg button { font: 500 13px/1 var(--sans); color: var(--ink); background: var(--surface); border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px 11px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
+  .flows button i { width: 10px; height: 10px; border-radius: 2px; background: var(--c, var(--muted)); flex: none; }
+  .flows button[aria-pressed="true"], .seg button[aria-pressed="true"] { border-color: var(--c, var(--ink)); box-shadow: inset 0 0 0 1px var(--c, var(--ink)); }
+  button:focus-visible, svg .node:focus-visible, svg .edge:focus-visible { outline: 2px solid var(--f-manual); outline-offset: 2px; }
+
+  .main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+  @media (max-width: 1040px) { .main { grid-template-columns: minmax(0, 1fr); } }
+  .canvas { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
+  .canvas svg { display: block; width: 100%; min-width: 880px; height: auto; }
+  figcaption { font-size: 12.5px; color: var(--muted); padding: 10px 14px; border-top: 1px solid var(--line); }
+  figure { margin: 0; }
+
+  aside { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px);
+    max-height: calc(100vh - 24px); overflow-y: auto; }
+  aside h2 { font: 600 17px/1.25 var(--cond); margin: 0 0 6px; }
+  aside p { margin: 0 0 10px; }
+  .eyebrow { font: 500 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 0 10px; }
+  .chip { font: 500 11.5px/1 var(--mono); padding: 5px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+  .chip.esp { color: var(--esp); border-color: var(--esp); } .chip.pi { color: var(--pi); border-color: var(--pi); }
+  .chip.web { color: var(--web); border-color: var(--web); } .chip.plan { border-style: dashed; color: var(--ink); }
+  ol.steps { margin: 4px 0 0; padding-left: 22px; display: grid; gap: 4px; }
+  ol.steps li { padding: 4px 6px; border-radius: 5px; cursor: default; }
+  ol.steps li:hover, ol.steps li:focus-visible { background: var(--bg); }
+  ol.steps li::marker { font: 500 12px var(--mono); color: var(--muted); }
+  ol.steps li small { display: block; font: 11px/1.4 var(--mono); color: var(--muted); }
+  .io { display: grid; gap: 3px; margin: 0 0 10px; font-size: 13px; }
+  .io h3 { font: 500 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 8px 0 4px; }
+  .io button { all: unset; cursor: pointer; display: grid; grid-template-columns: auto 1fr; gap: 6px; padding: 3px 0; }
+  .io button:hover b, .io button:focus-visible b { text-decoration: underline; }
+  .io span { color: var(--muted); }
+  code, pre { font: 12px/1.45 var(--mono); }
+  code { background: var(--bg); padding: 2px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+  pre.payload { background: var(--bg); padding: 10px; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 10px; }
+  .back { all: unset; cursor: pointer; font: 500 12px var(--mono); color: var(--muted); margin-bottom: 10px; display: inline-block; }
+  .back:hover { color: var(--ink); }
+  .legend { display: grid; gap: 7px; font-size: 13px; margin-top: 12px; }
+  .legend div { display: grid; grid-template-columns: 34px 1fr; gap: 8px; align-items: center; }
+  .legend svg { width: 34px; height: 16px; }
+
+  /* ---- SVG sơ đồ chính ---- */
+  .frame rect { stroke-width: 1.6; }
+  .frame.hw-esp rect { stroke: var(--esp); fill: var(--esp-tint); }
+  .frame.hw-pi rect { stroke: var(--pi); fill: var(--pi-tint); }
+  .frame.hw-web rect { stroke: var(--web); fill: var(--web-tint); }
+  .frame.proc rect { stroke: var(--proc); fill: none; stroke-width: 1; stroke-dasharray: 2 3; }
+  .frame.plan rect { stroke-dasharray: 7 5; }
+  .frame text.fl { font: 600 13px var(--cond); }
+  .frame text.ft { font: 500 9.5px var(--mono); letter-spacing: .08em; fill: var(--muted); }
+  .frame.hw-esp text.fl { fill: var(--esp); } .frame.hw-pi text.fl { fill: var(--pi); } .frame.hw-web text.fl { fill: var(--web); }
+  .frame.proc text.fl { fill: var(--proc); font-size: 12px; }
+
+  .node { cursor: pointer; transition: opacity .2s; }
+  .node rect.box { fill: var(--node); stroke: var(--ink); stroke-width: 1.2; }
+  .node.dev rect.box { stroke-width: 2; }
+  .node .pin { stroke: var(--ink); stroke-width: 1.4; }
+  .node.plan rect.box { stroke-dasharray: 5 3.5; }
+  .node text.t { font: 600 12.5px var(--cond); fill: var(--ink); }
+  .node text.s { font: 400 9.8px var(--mono); fill: var(--muted); }
+  .node text.tag { font: 500 8.5px var(--mono); fill: var(--muted); letter-spacing: .06em; }
+  .node:hover rect.box { stroke-width: 2.2; }
+  .node.sel rect.box { stroke-width: 2.6; stroke: var(--f-manual); }
+
+  .edge { cursor: pointer; }
+  .edge path.ln { fill: none; stroke: var(--muted); stroke-width: 1.3; transition: opacity .2s, stroke .2s; }
+  .edge.plan path.ln { stroke-dasharray: 5 4; }
+  .edge path.hit { fill: none; stroke: transparent; stroke-width: 12; }
+  .edge:hover path.ln, .edge.hot path.ln, .edge.sel path.ln { stroke: var(--ink); stroke-width: 2.4; }
+  .lbl { opacity: 0; transition: opacity .15s; pointer-events: none; }
+  .lbl rect { fill: var(--surface); stroke: var(--line); }
+  .lbl text { font: 500 10px var(--mono); fill: var(--ink); }
+  .lbl.hover, .lbl.on, .lbl.hot { opacity: 1; }
+  .lbl.hot rect { stroke: var(--ink); stroke-width: 1.4; }
+
+  svg.focus .node:not(.on), svg.focus .edge:not(.on), svg.focus .frame.proc:not(.on) { opacity: .16; }
+  svg.focus .edge.on path.ln { stroke: var(--fc); stroke-width: 2.4; stroke-dasharray: 7 5; animation: flow 0.9s linear infinite; }
+  svg.focus .edge.on.hot path.ln { stroke-width: 4; }
+  svg.focus .node.on rect.box { stroke: var(--fc); stroke-width: 2.2; }
+  @keyframes flow { to { stroke-dashoffset: -24; } }
+  @media (prefers-reduced-motion: reduce) { svg.focus .edge.on path.ln { animation: none; } .node, .edge path.ln { transition: none; } }
+  .mk-default { fill: var(--muted); } .mk-ink { fill: var(--ink); }
+
+  /* ---- hình bản đồ log-odds ---- */
+  .og { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .og { grid-template-columns: minmax(0, 1fr); } }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; min-width: 0; }
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .seg button { font-size: 12.5px; padding: 7px 10px; }
+  #og svg { width: 100%; height: auto; display: block; }
+  #og .cell { stroke: var(--line); stroke-width: .5; fill: transparent; }
+  #og .cell.free { fill: var(--free); } #og .cell.cand { fill: var(--cand); } #og .cell.occ { fill: var(--occ); }
+  #og .truth { fill: none; stroke: var(--truth); stroke-width: 2; }
+  #og .ray { stroke: var(--muted); stroke-width: .8; opacity: .55; }
+  #og .cone { fill: none; stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; }
+  #og .sensor { fill: var(--surface); stroke: var(--ink); stroke-width: 1.5; }
+  #og text { font: 500 10px var(--mono); fill: var(--ink); }
+  .oglegend { display: flex; flex-wrap: wrap; gap: 10px 16px; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+  .oglegend span { display: inline-flex; gap: 6px; align-items: center; }
+  .oglegend i { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+  .ogstat { font: 12px/1.5 var(--mono); color: var(--muted); margin-top: 6px; }
+  ol.pipe { margin: 0; padding-left: 22px; display: grid; gap: 8px; }
+  ol.pipe li::marker { font: 500 12px var(--mono); color: var(--muted); }
+  ol.pipe b { font-weight: 600; }
+  ol.pipe .why { color: var(--muted); font-size: 13px; }
+  .tablewrap { overflow-x: auto; margin-top: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 560px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font: 500 11px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  td:first-child { color: var(--muted); white-space: nowrap; }
+  td.diff { font-weight: 500; }
+
+  /* ---- lắp mạch ---- */
+  :root { --w-motor: #c2402e; --w-5v: #c98500; --w-gnd: #2a3034; --w-sig: #2f69b3; --w-part: #7b3fb2; --w-part-bg: #f6f0fb; --w-batt: #3f7a2e; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --w-motor: #ff7d66; --w-5v: #ffbb4a; --w-gnd: #c3ccd1; --w-sig: #74a8f0; --w-part: #c79bf6; --w-part-bg: #261d31; --w-batt: #8fd47a; } }
+  :root[data-theme="dark"] { --w-motor: #ff7d66; --w-5v: #ffbb4a; --w-gnd: #c3ccd1; --w-sig: #74a8f0; --w-part: #c79bf6; --w-part-bg: #261d31; --w-batt: #8fd47a; }
+
+  .jump { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; }
+  .jump a { font: 500 12.5px/1 var(--mono); color: var(--ink); text-decoration: none; border: 1px solid var(--line); background: var(--surface);
+    border-radius: 999px; padding: 7px 11px; }
+  .jump a:hover, .jump a:focus-visible { border-color: var(--ink); }
+  h2.sec[id] { scroll-margin-top: calc(env(safe-area-inset-top, 0px) + 12px); }
+
+  #wsvg { display: block; width: 100%; min-width: 900px; height: auto; }
+  #wsvg .wbox { cursor: pointer; }
+  #wsvg .wbox rect.b { fill: var(--node); stroke: var(--ink); stroke-width: 1.3; }
+  #wsvg .wbox.batt rect.b { stroke: var(--w-batt); stroke-width: 2; }
+  #wsvg .wbox.mod rect.b { stroke-width: 1.8; }
+  #wsvg .wbox text.t { font: 600 12.5px var(--cond); fill: var(--ink); }
+  #wsvg .wbox text.s { font: 400 10px var(--mono); fill: var(--muted); }
+  #wsvg .cell { fill: var(--w-batt); opacity: .75; }
+  #wsvg .w { cursor: pointer; }
+  #wsvg .w path.l { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+  #wsvg .w path.h { fill: none; stroke: transparent; stroke-width: 12; }
+  #wsvg .w.motor path.l { stroke: var(--w-motor); stroke-width: 4; }
+  #wsvg .w.coil path.l { stroke: var(--w-motor); stroke-width: 2; stroke-dasharray: 2 3; }
+  #wsvg .w.batt path.l { stroke: var(--w-motor); stroke-width: 2.5; }
+  #wsvg .w.v5 path.l { stroke: var(--w-5v); stroke-width: 2.8; }
+  #wsvg .w.gndm path.l { stroke: var(--w-gnd); stroke-width: 4; }
+  #wsvg .w.gnd path.l { stroke: var(--w-gnd); stroke-width: 1.6; }
+  #wsvg .w.sig path.l { stroke: var(--w-sig); stroke-width: 1.6; stroke-dasharray: 6 3; }
+  #wsvg .w:hover path.l, #wsvg .w.sel path.l { filter: drop-shadow(0 0 2px var(--ink)); }
+  #wsvg .wb { cursor: pointer; }
+  #wsvg .wb rect { fill: var(--w-part-bg); stroke: var(--w-part); stroke-width: 1.3; }
+  #wsvg .wb text { font: 500 10.5px var(--mono); fill: var(--w-part); }
+  #wsvg .wb line { stroke: var(--w-part); stroke-width: 1.3; }
+  #wsvg .wb:hover rect, #wsvg .wb.sel rect { stroke-width: 2.4; }
+  #wsvg .wbox:hover rect.b, #wsvg .wbox.sel rect.b { stroke-width: 2.6; }
+  #wsvg .wl { pointer-events: none; opacity: 0; transition: opacity .12s; }
+  #wsvg .wl rect { fill: var(--surface); stroke: var(--line); }
+  #wsvg .wl text { font: 500 10px var(--mono); fill: var(--ink); }
+  #wsvg .w:hover + .wl, #wsvg .wl.on { opacity: 1; }
+  #wsvg .note rect { fill: var(--bg); stroke: var(--w-gnd); stroke-dasharray: 4 3; }
+  #wsvg .note text { font: 500 10.5px var(--mono); fill: var(--ink); }
+  #wsvg.focus [data-layer]:not(.on) { opacity: .13; }
+  #wsvg [data-layer] { transition: opacity .2s; }
+  @media (prefers-reduced-motion: reduce) { #wsvg [data-layer], #wsvg .wl { transition: none; } }
+  .wkey { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12.5px; color: var(--muted); padding: 10px 14px; border-top: 1px solid var(--line); }
+  .wkey span { display: inline-flex; align-items: center; gap: 6px; }
+  .wkey i { width: 22px; height: 0; border-top: 3px solid; display: inline-block; }
+  dl.wd { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; margin: 0 0 10px; font-size: 13px; }
+  dl.wd dt { font: 500 11px/1.6 var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  dl.wd dd { margin: 0; }
+
+  .pins { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; margin-top: 16px; }
+  .pins .card h3 { font: 600 15px/1.25 var(--cond); margin: 0 0 4px; }
+  .pins .card p.hint { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+  .pins table { min-width: 0; }
+  .pins td:first-child { font: 500 12px var(--mono); color: var(--ink); }
+  .pins td:nth-child(2) { white-space: normal; }
+  .pins svg { width: 100%; height: auto; display: block; margin: 4px 0 8px; }
+  .pins svg text { font: 500 10.5px var(--mono); fill: var(--ink); }
+  .pins svg .lbl2 { fill: var(--muted); }
+  .pins svg .mod { fill: var(--node); stroke: var(--ink); stroke-width: 1.4; }
+  .pins svg .pin { fill: var(--surface); stroke: var(--ink); }
+  .pins svg .wr { stroke: var(--w-sig); stroke-width: 1.4; fill: none; }
+  .pins svg .wp { stroke: var(--w-motor); stroke-width: 2; fill: none; }
+  .pins svg .wg { stroke: var(--w-gnd); stroke-width: 1.6; fill: none; }
+  .pins svg .res { fill: var(--w-part-bg); stroke: var(--w-part); }
+  .pins svg .rt { fill: var(--w-part); }
+  ol.seq { margin: 0; padding-left: 22px; display: grid; gap: 7px; }
+  ol.seq li::marker { font: 500 12px var(--mono); color: var(--muted); }
+  .bom td:nth-child(3) { font: 500 12.5px var(--mono); text-align: right; white-space: nowrap; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>iot-ck Pipeline: xe cân bằng, SLAM trần, vật cản, giọng nói</h1>
+    <p class="lede">Ba phần: luồng dữ liệu giữa các khối, cách lắp mạch (nguồn, mass, tụ, trở, nối chân) và bản đồ vật cản siêu âm.</p>
+    <nav class="jump" aria-label="Mục lục"><a href="#du-lieu">Luồng dữ liệu</a><a href="#lap-mach">Lắp mạch</a><a href="#vat-can">Vật cản log-odds</a></nav>
+  </header>
+
+  <h2 class="sec" id="du-lieu" style="margin-top:8px">Luồng dữ liệu</h2>
+  <p class="lede">Khung đậm là <b>thiết bị phần cứng</b>, khung chấm là <b>tiến trình</b> trên Pi. Mic INMP441 nằm trên <b>ESP32 #2</b>, gửi PCM thô qua
+      WiFi WebSocket tới Pi (Pi là server). Nét đứt là phần <b>mới làm, đã chạy trên mô phỏng, chưa thử trên xe thật</b>. Chọn một luồng, rê chuột lên từng bước để thấy mũi tên của bước đó;
+      <b>bấm vào mũi tên</b> để xem định dạng dữ liệu, <b>bấm vào khối</b> để xem khối làm gì.</p>
+
+  <div class="flows" id="flows" role="toolbar" aria-label="Chọn luồng"></div>
+
+  <div class="main">
+    <figure class="canvas">
+      <svg id="dia" viewBox="0 0 1190 1050" role="img" aria-label="Sơ đồ khối toàn hệ thống iot-ck theo phần cứng: ESP32 cân bằng, ESP32 mic, Raspberry Pi 4 với robotd, slam_node, Speech-control, và trình duyệt."></svg>
+      <figcaption>Thông số lấy từ <code>firmware/include/config.h</code>, <code>pi/config/slam.yaml</code>, <code>pi/config/robot.yaml</code>;
+        nét đứt: đã chạy trên mô phỏng (slam_sim), chưa thử trên xe thật.</figcaption>
+    </figure>
+    <aside id="panel" aria-live="polite"></aside>
+  </div>
+
+
+  <h2 class="sec" id="lap-mach">Lắp mạch: nguồn, mass, tụ và trở</h2>
+  <p class="lede">Ba khay, mỗi khay <b>4 pin 18650 nối tiếp</b> (16,8 V khi đầy, 14,8 V danh định, ~12 V khi cạn): khay 1 và khay 2 mỗi khay một
+    A4988 + động cơ, khay 3 qua <b>XL4016</b> hạ xuống 5,15 V cho Pi, ESP32 và cảm biến. Tách nguồn chưa đủ: nhiễu động cơ vẫn lọt qua
+    <b>đường mass</b>, qua <b>gai điện áp khi hãm</b> và qua <b>dây chạy sát nhau</b>. Bấm vào khay, module, dây hoặc nhãn tím (tụ / trở) để xem
+    giá trị, chỗ lắp và lý do.</p>
+
+  <div class="seg" id="wlayers" role="toolbar" aria-label="Lọc lớp" style="margin-top:12px"></div>
+  <div class="main">
+    <figure class="canvas">
+      <svg id="wsvg" viewBox="0 0 1150 780" role="img" aria-label="Sơ đồ nguồn và mass: ba khay pin 4S, A4988 hai bánh, XL4016 5 V cho Pi và ESP32, vị trí tụ và trở, chỗ hai miền mass gặp nhau."></svg>
+      <div class="wkey">
+        <span><i style="border-color:var(--w-motor)"></i>+ pin / động cơ</span>
+        <span><i style="border-color:var(--w-5v)"></i>5 V logic</span>
+        <span><i style="border-color:var(--w-gnd)"></i>mass (dày = dòng động cơ)</span>
+        <span><i style="border-color:var(--w-sig);border-top-style:dashed"></i>tín hiệu</span>
+        <span><i style="border-color:var(--w-part);border-top-width:8px;width:14px"></i>tụ / trở cần lắp</span>
+      </div>
+    </figure>
+    <aside id="wpanel" aria-live="polite"></aside>
+  </div>
+
+  <div class="pins">
+    <div class="card">
+      <h3>ESP32 #1 (cân bằng)</h3>
+      <p class="hint">Chân theo <code>firmware/include/config.h</code>. Siêu âm: sửa bảng <code>SONAR_SENSORS</code> rồi nạp lại.</p>
+      <div class="tablewrap" style="margin-top:0"><table>
+        <thead><tr><th>Chân</th><th>Nối tới</th></tr></thead>
+        <tbody>
+          <tr><td>VIN</td><td>5 V từ cọc ra XL4016 (nhánh riêng) + tụ 100 µF + 100 nF sát chân</td></tr>
+          <tr><td>3V3</td><td>GY-521 VCC, VDD logic hai A4988 · tụ 10 µF + 100 nF</td></tr>
+          <tr><td>GND</td><td>XL4016 OUT−, GND logic hai A4988, Pi chân 14 (cùng bó UART), GY-521, HC-SR04</td></tr>
+          <tr><td>21 / 22</td><td>SDA / SCL GY-521 (dây ≤ 15 cm, xoắn với GND)</td></tr>
+          <tr><td>26 / 25</td><td>STEP / DIR A4988 trái</td></tr>
+          <tr><td>19 / 18</td><td>STEP / DIR A4988 phải</td></tr>
+          <tr><td>27</td><td>ENABLE chung hai A4988 (10 kΩ kéo lên VDD: mất tín hiệu thì động cơ tắt)</td></tr>
+          <tr><td>32 / 34</td><td>HC-SR04 #0 trái: TRIG / ECHO qua cầu chia</td></tr>
+          <tr><td>33 / 35</td><td>HC-SR04 #1 giữa: TRIG / ECHO qua cầu chia</td></tr>
+          <tr><td>4 / 23</td><td>HC-SR04 #2 phải: TRIG / ECHO qua cầu chia</td></tr>
+          <tr><td>1 (TX0)</td><td>→ 1 kΩ → Pi chân 10 (RXD)</td></tr>
+          <tr><td>3 (RX0)</td><td>← 1 kΩ ← Pi chân 8 (TXD)</td></tr>
+          <tr><td>2</td><td>LED trên board</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h3>Raspberry Pi 4</h3>
+      <p class="hint">Cấp 5 V qua chân GPIO <b>hoặc</b> USB-C, không cấp cả hai cùng lúc.</p>
+      <div class="tablewrap" style="margin-top:0"><table>
+        <thead><tr><th>Chân</th><th>Nối tới</th></tr></thead>
+        <tbody>
+          <tr><td>2, 4 (5 V)</td><td>+5,15 V XL4016, dây ≥ 0,75 mm², ≤ 30 cm · tụ 1000 µF + 100 nF sát chân</td></tr>
+          <tr><td>6 (GND)</td><td>XL4016 OUT− (đi đôi, xoắn với dây 5 V)</td></tr>
+          <tr><td>8 (GPIO14 TXD)</td><td>→ 1 kΩ → ESP32 GPIO3 (RX0)</td></tr>
+          <tr><td>10 (GPIO15 RXD)</td><td>← 1 kΩ ← ESP32 GPIO1 (TX0)</td></tr>
+          <tr><td>14 (GND)</td><td>GND ESP32: dây mass đi cùng bó với TX/RX</td></tr>
+          <tr><td>CSI</td><td>Camera OV5647 (hướng lên trần); cáp dẹt đi xa dây động cơ</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h3>A4988 (×2): mỗi chân nối gì</h3>
+      <p class="hint">Mỗi khay động cơ chỉ cấp cho một A4988. Chỉnh Vref trước khi chạy; không cắm / rút dây động cơ khi khay đang bật.</p>
+      <svg viewBox="0 0 520 250" role="img" aria-label="Sơ đồ chân A4988: chân trái nối ESP32, chân phải nối pin, động cơ và 3V3.">
+        <rect class="mod" x="180" y="16" width="120" height="216" rx="4"/>
+        <text x="247" y="128" text-anchor="middle" transform="rotate(-90 247 124)" style="font-weight:600;letter-spacing:.2em">A4988</text>
+        <g id="a4p"></g>
+      </svg>
+      <div class="tablewrap" style="margin-top:0"><table>
+        <thead><tr><th>Việc</th><th>Cách làm</th></tr></thead>
+        <tbody>
+          <tr><td>Tìm cặp cuộn</td><td>Đo thông mạch 4 dây động cơ: hai dây thông nhau là một cuộn → 1A/1B, cặp còn lại → 2A/2B. Quay ngược chiều: đảo một cặp hoặc đổi <code>*_MOTOR_INVERT</code>.</td></tr>
+          <tr><td>Vref</td><td>I<sub>max</sub> = Vref / (8 · R<sub>s</sub>). Board Pololu R<sub>s</sub> = 0,068 Ω → 1 A ≈ 0,54 V; board có điện trở ghi "R100" (0,1 Ω) → 1 A ≈ 0,8 V. Đặt khoảng 70 % dòng định mức động cơ, có tản nhiệt.</td></tr>
+          <tr><td>Vi bước</td><td>MS1 = MS2 = MS3 = VDD → 1/16 (3200 bước/vòng, khớp <code>MICROSTEP 16</code>).</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h3>HC-SR04 (×3): cầu chia áp ECHO</h3>
+      <p class="hint">HC-SR04 chạy 5 V và trả ECHO 5 V; chân ESP32 chỉ chịu 3,3 V. TRIG nối thẳng (3,3 V đủ kích).</p>
+      <svg viewBox="0 0 440 150" role="img" aria-label="Cầu chia áp: ECHO 5 V qua 1 kΩ tới chân ESP32, 2 kΩ xuống GND, ra 3,3 V.">
+        <rect class="mod" x="10" y="30" width="96" height="76" rx="4"/>
+        <text x="58" y="52" text-anchor="middle" style="font-weight:600">HC-SR04</text>
+        <text x="20" y="72">VCC</text><text x="20" y="86">TRIG</text><text x="20" y="100">ECHO</text>
+        <path class="wp" d="M106 68 H150 V18 H420"/><text x="300" y="14">5 V (nhánh 5 V của ESP32) · tụ 47 µF + 100 nF</text>
+        <path class="wr" d="M106 82 H136 V128 H420"/><text x="250" y="124">TRIG ← GPIO 32 / 33 / 4 (nối thẳng)</text>
+        <path class="wr" d="M106 96 H170"/>
+        <rect class="res" x="170" y="88" width="56" height="16" rx="3"/><text class="rt" x="198" y="100" text-anchor="middle">1 kΩ</text>
+        <path class="wr" d="M226 96 H300 H420"/><circle cx="300" cy="96" r="3" style="fill:var(--w-sig)"/>
+        <text x="312" y="90">→ GPIO 34 / 35 / 23</text><text x="312" y="108" class="lbl2">≈ 3,3 V</text>
+        <path class="wg" d="M300 96 V104"/>
+        <g transform="translate(290,104)"><rect class="res" x="0" y="0" width="20" height="18" rx="3"/></g>
+        <text class="rt" x="260" y="117" text-anchor="end">2 kΩ</text>
+        <path class="wg" d="M300 122 V140 M290 140 H310"/><text x="316" y="143" class="lbl2">GND</text>
+      </svg>
+      <p class="hint" style="margin:0">Không có 2 kΩ: dùng 2,2 kΩ (ra 3,4 V, vẫn an toàn) hoặc hai trở 1 kΩ nối tiếp.</p>
+    </div>
+
+    <div class="card">
+      <h3>GY-521 (MPU-6050)</h3>
+      <p class="hint">Module đã có LDO và trở kéo lên I2C: không lắp thêm trở kéo lên.</p>
+      <div class="tablewrap" style="margin-top:0"><table>
+        <thead><tr><th>Chân</th><th>Nối tới</th></tr></thead>
+        <tbody>
+          <tr><td>VCC</td><td>3V3 ESP32 · tụ 10 µF + 100 nF sát module</td></tr>
+          <tr><td>GND</td><td>GND ESP32 (dây riêng, xoắn với SDA/SCL)</td></tr>
+          <tr><td>SCL / SDA</td><td>GPIO 22 / 21, dây ≤ 15 cm, đi xa dây động cơ</td></tr>
+          <tr><td>AD0</td><td>GND → địa chỉ 0x68 (khớp <code>MPU_ADDR</code>)</td></tr>
+          <tr><td>XDA, XCL, INT</td><td>Để trống</td></tr>
+          <tr><td>Hướng lắp</td><td>Mũi tên X chỉ về trước xe, mặt linh kiện quay lên, gần trục bánh, bắt chặt (rung làm gyro nhiễu)</td></tr>
+        </tbody>
+      </table></div>
+      <p class="hint" style="margin:8px 0 0">ESP32 báo <code>Khong thay MPU-6050 (khong co thiet bi nao)</code>: thường là đảo SDA/SCL, chưa hàn chân header, hoặc VCC chưa có điện.</p>
+    </div>
+
+    <div class="card">
+      <h3>ESP32 #2 + INMP441 (mic)</h3>
+      <p class="hint">Theo <code>firmware-mic/include/config.h</code>. Đặt mic xa động cơ và quạt; dây I2S ≤ 10 cm.</p>
+      <div class="tablewrap" style="margin-top:0"><table>
+        <thead><tr><th>Chân</th><th>Nối tới</th></tr></thead>
+        <tbody>
+          <tr><td>ESP32 VIN</td><td>5 V nhánh riêng từ XL4016 (hoặc sạc dự phòng USB) · tụ 100 µF</td></tr>
+          <tr><td>ESP32 3V3</td><td>INMP441 VDD · tụ 220 µF + 100 nF (WiFi kéo đỉnh 300–500 mA)</td></tr>
+          <tr><td>GPIO 26</td><td>INMP441 SCK</td></tr>
+          <tr><td>GPIO 25</td><td>INMP441 WS</td></tr>
+          <tr><td>GPIO 33</td><td>INMP441 SD</td></tr>
+          <tr><td>INMP441 L/R</td><td>GND → kênh trái (<code>MIC_RIGHT_CHANNEL 0</code>)</td></tr>
+          <tr><td>INMP441 VDD</td><td>tụ 10 µF + 100 nF sát mic (không cấp 5 V)</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1">
+      <h3>Danh sách tụ, trở và phụ kiện</h3>
+      <p class="hint">Điện áp tụ phía pin chọn 35 V (pin đầy 16,8 V, gai khi hãm cao hơn). Tụ điện phân loại low-ESR; tụ 100 nF gốm, đặt sát chân, chân tụ cắt ngắn.</p>
+      <div class="tablewrap" style="margin-top:0"><table class="bom">
+        <thead><tr><th>Linh kiện</th><th>Lắp ở</th><th>SL</th></tr></thead>
+        <tbody>
+          <tr><td>Tụ điện phân 100 µF / 35 V</td><td>VMOT–GND mỗi A4988, sát chân (bắt buộc)</td><td>2</td></tr>
+          <tr><td>Tụ điện phân 470 µF / 35 V</td><td>Đầu khay 1, khay 2 (sau công tắc + cầu chì)</td><td>2</td></tr>
+          <tr><td>Diode TVS SMBJ20A</td><td>Song song tụ 470 µF ở mỗi khay động cơ, vạch (cathode) về +</td><td>2</td></tr>
+          <tr><td>Tụ điện phân 220 µF / 35 V</td><td>Đầu vào XL4016</td><td>1</td></tr>
+          <tr><td>Tụ điện phân 1000 µF / 16 V</td><td>Chân 5 V–GND của Pi</td><td>1</td></tr>
+          <tr><td>Tụ điện phân 100 µF / 16 V</td><td>VIN ESP32 #1, VIN ESP32 #2</td><td>2</td></tr>
+          <tr><td>Tụ điện phân 220 µF / 10 V</td><td>3V3 ESP32 #2 (WiFi)</td><td>1</td></tr>
+          <tr><td>Tụ 47 µF / 16 V</td><td>VCC–GND mỗi HC-SR04</td><td>3</td></tr>
+          <tr><td>Tụ 10 µF</td><td>3V3 ESP32 #1, VCC GY-521, VDD INMP441</td><td>3</td></tr>
+          <tr><td>Tụ gốm 100 nF</td><td>Cạnh mỗi tụ lớn ở trên (trừ 470 µF) + VDD logic mỗi A4988</td><td>14</td></tr>
+          <tr><td>Trở 1 kΩ</td><td>3 cầu chia ECHO + 2 dây UART</td><td>5</td></tr>
+          <tr><td>Trở 2 kΩ (hoặc 2,2 kΩ)</td><td>3 cầu chia ECHO (xuống GND)</td><td>3</td></tr>
+          <tr><td>Trở 100 Ω (tuỳ chọn)</td><td>Nối tiếp STEP, DIR hai driver + EN, đặt gần ESP32</td><td>5</td></tr>
+          <tr><td>Công tắc + cầu chì 3 A</td><td>Ngay sau cực + mỗi khay</td><td>3</td></tr>
+          <tr><td>Diode Schottky SS54 (tuỳ chọn)</td><td>Chỉ khi muốn gộp hai khay động cơ thành một đường (mỗi khay một diode)</td><td>2</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h3>Trình tự bật / tắt</h3>
+      <ol class="seq">
+        <li>Lần đầu: chưa nối Pi, bật khay 3, chỉnh XL4016 ra 5,15 V (không tải). Nối Pi rồi đo lại tại chân 2–6 khi Pi đang chạy: 5,0–5,2 V.</li>
+        <li><b>Bật:</b> khay 3 trước (Pi + ESP32). ESP32 khởi động, EN = HIGH nên động cơ còn tắt. Sau đó bật khay 1, khay 2.</li>
+        <li>Để xe nằm yên ~2 s cho ESP32 hiệu chỉnh gyro, rồi dựng xe.</li>
+        <li><b>Tắt:</b> khay 1, khay 2 trước, rồi khay 3. Không cắm / rút dây động cơ khi khay động cơ đang bật (cháy A4988).</li>
+        <li>Pin không có mạch bảo vệ: ngừng chạy khi khay còn ~12,8 V (3,2 V/cell); không xả dưới 12 V.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h3>Kiểm tra sau khi lắp</h3>
+      <ol class="seq">
+        <li>Trên Pi, lái vài phút rồi chạy <code>vcgencmd get_throttled</code>: phải là <code>throttled=0x0</code> (khác 0 = từng thiếu áp).</li>
+        <li>Đồng hồ chế độ min/max: 5 V Pi không xuống dưới 4,9 V, 3V3 ESP32 không dưới 3,1 V khi xe tăng tốc / hãm gấp.</li>
+        <li>Web, telemetry "IMU / UART": CRC và mất gói đứng yên ở 0 khi động cơ chạy. Tăng: xem lại trở UART và đường mass.</li>
+        <li>IMU đứng ở 200 Hz, không còn <code>ST:IMU_ERROR</code>; siêu âm không báo lỗi (chip đỏ trên web).</li>
+        <li>Sờ A4988 sau 5 phút: nóng tay được thì ổn; quá nóng thì giảm Vref hoặc thêm quạt.</li>
+      </ol>
+    </div>
+  </div>
+
+  <h2 class="sec" id="vat-can">Bản đồ vật cản log-odds: cách của EGO-Planner, rút gọn cho siêu âm + A*</h2>
+  <p class="lede">EGO-Planner chiếu từng điểm ảnh độ sâu thành một tia: ô cuối tia được cộng "trúng", các ô trên đường đi bị trừ "trống", mỗi ô chỉ cập nhật
+    <b>một lần mỗi khung</b> (đếm trúng / trống rồi chọn), kẹp log-odds, vượt ngưỡng là vật cản, phình ra rồi mới cho bộ lập đường kiểm tra va chạm.
+    HC-SR04 không biết tia nào trúng, nên một số đo được rải thành <b>một chùm tia</b> và chỉ cập nhật khi xe đã đổi vị trí. Hình bên trái tính thật trên lưới 5 cm.</p>
+
+  <div class="og">
+    <div class="card" id="og">
+      <div class="seg" id="ogseg" role="toolbar" aria-label="Số vị trí đo"></div>
+      <svg id="ogsvg" viewBox="0 0 400 300" role="img" aria-label="Lưới 5 cm: cung siêu âm từ nhiều vị trí hội tụ vào vật thật, các ô sai bị các chùm khác xoá."></svg>
+      <div class="oglegend">
+        <span><i style="background:var(--occ)"></i>vật cản (L &gt; 1,39)</span>
+        <span><i style="background:var(--cand)"></i>ứng viên (0 &lt; L ≤ 1,39)</span>
+        <span><i style="background:var(--free)"></i>trống (L &lt; 0)</span>
+        <span><i style="border:2px solid var(--truth)"></i>vật thật</span>
+      </div>
+      <div class="ogstat" id="ogstat"></div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">Mỗi lần cảm biến k có số đo mới (trong slam_node)</div>
+      <ol class="pipe">
+        <li><b>Cổng.</b> Bỏ nếu |pitch| &gt; 8° hoặc xe chưa dời ≥ 3 cm / xoay ≥ 3° kể từ lần cập nhật trước của cảm biến k.
+          <div class="why">EGO cập nhật mọi khung vì mỗi tia độc lập. Siêu âm đứng yên lặp lại đúng một cung 15 lần/giây: không chặn thì cả cung thành vật cản sau ~0,4 s.</div></li>
+        <li><b>Rải chùm tia.</b> 7 tia từ −15° đến +15° (cách 5°), gốc = tư thế odom ∘ vị trí lắp cảm biến, đi bằng Bresenham trên lưới 5 cm.
+          Ô có r &lt; d − 5 cm: <i>trống</i>. Ô tại r ≈ d: <i>trúng</i>, trọng số w = 1 ở trục, 0,5 ở mép. Chỉ ghi "trúng" khi d ≤ 1,2 m: xa hơn cung rộng tới ~1 m, xe đi thẳng thì cung trùng nhau qua nhiều lần đo và sinh "vật cản ma" ngay trên đường (đã thấy trong mô phỏng). "Không có vang": trống tới 1,2 m.</li>
+        <li><b>Mỗi ô một lần</b> (như <code>count_hit</code> / <code>count_hit_and_miss</code> của EGO): trúng nếu số tia trúng ≥ số tia trống.</li>
+        <li><b>Cập nhật log-odds.</b> Trúng: L += 0,619·w (p_hit 0,65 như EGO, nhân trọng số góc). Trống: L −= 0,619 (p_miss 0,35). Kẹp L ∈ [−1,99; +2,20] (p 0,12…0,90). Ô mới bắt đầu ở L = 0 (chưa biết).</li>
+        <li><b>Hai lớp.</b> <i>Tạm</i>: cửa sổ 6 × 6 m quanh xe, L giảm dần về 0 (τ 25 s), cảm biến chỉ nhìn phía trước nên phải tự quên.
+          <i>Tĩnh</i> (khi tạo bản đồ / mở rộng): lưu số đo gắn keyframe, dựng lại sau mỗi lần tối ưu pose graph, lưu cùng bản đồ, không quên.</li>
+        <li><b>Ngưỡng + phình.</b> L &gt; 1,386 (p_occ 0,80, như EGO) là vật cản; phình đĩa 15 cm (thân 10 + dự phòng 5) thành mặt nạ cấm, như <code>occupancy_buffer_inflate_</code>.</li>
+        <li><b>A\*.</b> Ô đi được = vùng đã đi ∧ ¬mặt nạ cấm. Đường còn lại 1 m phía trước đè lên mặt nạ: dừng, quét ±25°, chờ 3 s, rồi chạy lại A*.
+          <div class="why">Dừng khẩn và giảm tốc dùng thẳng khoảng cách d, không đợi lưới xác nhận.</div></li>
+      </ol>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th></th><th>EGO-Planner (plan_env)</th><th>iot-ck</th></tr></thead>
+          <tbody>
+            <tr><td>Cảm biến</td><td>Camera độ sâu, mỗi điểm ảnh một tia có điểm cuối chính xác</td><td class="diff">3 HC-SR04: một khoảng cách cho cả chùm ±15°</td></tr>
+            <tr><td>Khi nào cập nhật</td><td>Mọi khung độ sâu (timer 50 ms)</td><td class="diff">Chỉ khi xe dời ≥ 3 cm / xoay ≥ 3°</td></tr>
+            <tr><td>Trúng / trống</td><td>p_hit 0,65 / p_miss 0,35 (+0,62 / −0,62)</td><td>p_hit 0,65 × trọng số góc (1 ở trục, 0,5 ở mép) / p_miss 0,35</td></tr>
+            <tr><td>Kẹp, ngưỡng</td><td>p_min 0,12, p_max 0,90, p_occ 0,80</td><td>Giữ nguyên</td></tr>
+            <tr><td>Tia quá xa</td><td>Cắt ở max_ray_length 4,5 m, chỉ trống</td><td class="diff">d &gt; 1,2 m: chỉ trống, không ghi trúng; "không vang": trống tới 1,2 m</td></tr>
+            <tr><td>Quên</td><td>Không giảm theo thời gian; đặt lại ô ngoài vùng cục bộ</td><td class="diff">Lớp tạm giảm về 0 (τ 25 s); lớp tĩnh gắn keyframe</td></tr>
+            <tr><td>Phình</td><td>obstacles_inflation 0,099 m (khối 3×3×3)</td><td>Đĩa 15 cm trên lưới 2D</td></tr>
+            <tr><td>Lập đường</td><td>Tối ưu B-spline; A* chỉ để dẫn đoạn quỹ đạo bị va chạm</td><td class="diff">Chỉ A* (replan) + pure pursuit, xe chậm</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const NS = "http://www.w3.org/2000/svg";
+  const W = 140, H = 46;
+  const el = (tag, attrs = {}, parent) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  };
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // ================================================================ khung phần cứng / tiến trình
+  const FRAMES = [
+    { id: "browser", x: 430, y: 14, w: 750, h: 100, cls: "hw-web", label: "Trình duyệt", tag: "LAPTOP / ĐIỆN THOẠI" },
+    { id: "esp", x: 14, y: 150, w: 398, h: 612, cls: "hw-esp", label: "ESP32 #1 · cân bằng", tag: "PHẦN CỨNG · 400 Hz" },
+    { id: "espmic", x: 14, y: 800, w: 398, h: 226, cls: "hw-esp plan", label: "ESP32 #2 · mic", tag: "PHẦN CỨNG · WiFi" },
+    { id: "pi", x: 430, y: 150, w: 750, h: 876, cls: "hw-pi", label: "Raspberry Pi 4 · 4 GB", tag: "PHẦN CỨNG · Debian Trixie" },
+    { id: "robotd", x: 448, y: 188, w: 364, h: 540, cls: "proc", label: "robotd · Python", tag: "TIẾN TRÌNH" },
+    { id: "slam", x: 830, y: 188, w: 340, h: 540, cls: "proc", label: "slam_node · C++17", tag: "TIẾN TRÌNH CON" },
+    { id: "speech", x: 448, y: 742, w: 364, h: 270, cls: "proc", label: "Speech-control · Python", tag: "TIẾN TRÌNH" },
+  ];
+
+  // ================================================================ khối
+  const N = {
+    mpu: { x: 34, y: 200, t: "MPU-6050", s: "I2C 400 kHz", hw: "esp", dev: 1, file: "firmware/src/imu.cpp", rate: "400 Hz",
+      d: "Cảm biến gia tốc + gyro 6 trục. ESP32 đọc mỗi chu kỳ 2,5 ms. Gyro đã trừ offset hiệu chỉnh lúc bật nguồn (để xe nằm yên ~2 s)." },
+    comp: { x: 238, y: 200, t: "Bộ lọc bù", s: "τ 0,5 s → góc chúi", hw: "esp", file: "firmware/src/main.cpp", rate: "400 Hz",
+      d: "Trộn góc tính từ gia tốc (có bù gia tốc bánh) với tích phân gyro ra góc chúi. Nghiêng quá 45° thì tắt động cơ; dựng thẳng ±5° giữ 0,5 s thì tự cân bằng." },
+    speedpi: { x: 238, y: 290, t: "PI tốc độ", s: "v đặt → góc đặt", hw: "esp", file: "firmware/src/main.cpp", rate: "400 Hz",
+      d: "Vòng ngoài của PID tầng: sai số giữa tốc độ đặt và tốc độ bánh đã lọc ra góc nghiêng đặt, giới hạn ±10°. Kp 6, Ki 3. Đổi lệnh tiến/lùi thì xoá tích phân." },
+    anglepid: { x: 238, y: 380, t: "PID góc", s: "góc → gia tốc bánh", hw: "esp", file: "firmware/src/main.cpp", rate: "400 Hz",
+      d: "Vòng trong: (góc chúi − góc đặt) ra gia tốc bánh. Kp 30, Kd 2 theo tốc độ gyro, giới hạn 6 m/s². Chạm giới hạn thì bật cờ 'dễ trượt bước' gửi Pi." },
+    integ: { x: 238, y: 470, t: "∫ + vi sai quay", s: "gia tốc → bước/s", hw: "esp", file: "firmware/src/main.cpp", rate: "400 Hz",
+      d: "Tích phân gia tốc thành tốc độ bánh (≤ 0,70 m/s), cộng vi sai t cho bánh trái, trừ cho bánh phải để quay. Vượt 16000 bước/s thì thu nhỏ cùng tỉ lệ để giữ hướng." },
+    stepisr: { x: 238, y: 560, t: "Step ISR", s: "timer 40 kHz", hw: "esp", file: "firmware/src/steppers.cpp", rate: "40 kHz",
+      d: "Ngắt timer phát xung STEP cho 2 bánh và đếm tổng số bước. Số bước ra lệnh là odometry bánh xe cho SLAM (xe không có encoder)." },
+    a4988: { x: 34, y: 560, t: "A4988 + Step 42", s: "×2 · vi bước 1/16", hw: "esp", dev: 1, file: "firmware/include/config.h",
+      d: "Hai driver A4988 và động cơ bước 1,8°, vi bước 1/16 (3200 bước/vòng), bánh 65 mm. Chân STEP/DIR: trái 26/25, phải 19/18, EN chung 27." },
+    hcsr: { x: 34, y: 470, t: "HC-SR04 ×3", s: "0°, ±40° · ≤ 2 m", hw: "esp", dev: 1, plan: 1,
+      d: "Mặc định ba cảm biến hướng 0° và ±40° (chùm ±15°, phủ ~110° phía trước). TRIG GPIO32/33/4, ECHO GPIO34/35/23 qua cầu chia áp 1k/2k (5 V → 3,3 V). Số lượng, chân, vị trí, góc: chỉ sửa bảng SONAR_SENSORS trong firmware/include/config.h rồi nạp lại; ESP32 gửi bảng này cho Pi." },
+    sonar: { x: 34, y: 380, t: "Siêu âm + dừng khẩn", s: "tuần tự ~15 Hz", hw: "esp", plan: 1, file: "firmware/src/sonar.cpp (mới)", rate: "~15 Hz / cảm biến",
+      d: "Phát TRIG lần lượt từng cảm biến, đo ECHO bằng ngắt nên không chặn vòng 400 Hz. Dừng khẩn tại chỗ: lệnh tiến mà giữa < 15 cm hoặc bên < 12 cm thì tốc độ đặt = 0, vẫn cho lùi và xoay." },
+    link: { x: 34, y: 670, w: 344, t: "Link UART 460800", s: "nhận VEL:v,t · gửi gói IMU 200 Hz", hw: "esp", file: "firmware/src/link.cpp", rate: "200 Hz ra, 10–20 Hz vào",
+      d: "UART0 tới Pi. Nhận VEL:v,t (giới hạn 0,35 / 0,20 m/s, làm mượt 0,4 m/s², 0,5 s không có lệnh thì dừng). Gửi khung A5 5A + CRC8: gói IMU 32 B 200 Hz; bản 2.2 thêm khung SONAR (mỗi số đo) và SONAR_GEOM (bảng vị trí cảm biến)." },
+
+    inmp: { x: 34, y: 850, t: "INMP441", s: "I2S · kênh trái", hw: "espmic", dev: 1,
+      d: "Mic MEMS I2S, chân L/R nối GND nên tín hiệu ở kênh trái. Theo thay đổi mới, mic nối vào ESP32 #2 thay vì nối thẳng vào Pi." },
+    i2s: { x: 238, y: 850, t: "I2S DMA", s: "16 kHz → PCM16", hw: "espmic", plan: 1, rate: "16 kHz",
+      d: "Đọc I2S bằng DMA ở 16 kHz, lấy 24 bit kênh trái, đổi sang PCM16 và gom thành khung 20 ms (320 mẫu, 640 byte)." },
+    wsclient: { x: 238, y: 942, t: "WebSocket client", s: "WiFi · khung 20 ms", hw: "espmic", plan: 1, rate: "50 khung/s",
+      d: "Nối WiFi, mở WebSocket tới ws://raspberrypi4.local:8765/audio và gửi từng khung PCM dạng nhị phân (~32 kB/s). Mất kết nối thì tự nối lại sau 2 s." },
+
+    gcs: { x: 652, y: 46, t: "Web GCS", s: "bản đồ · WASD · goto", hw: "web", file: "pi/web/index.html",
+      d: "Giao diện một file: bản đồ vùng đã đi, quỹ đạo, keyframe, địa điểm, đường A*, lái WASD, goto, nhiệm vụ, khung giọng nói, telemetry. Nón siêu âm, lớp vật cản (đỏ tĩnh, cam tạm), công cụ tẩy (phím E)." },
+
+    camera: { x: 468, y: 230, t: "Camera OV5647", s: "CSI · 640×480 15 fps", hw: "pi", proc: "robotd", dev: 1, file: "pi/robot/camera.py", rate: "15 Hz",
+      d: "Camera gắn hướng thẳng lên trần, đọc bằng Picamera2. Phơi sáng cố định 12 ms để ảnh ít nhoè khi xe chúi." },
+    web: { x: 652, y: 230, t: "Web server", s: "aiohttp :8080 /ws", hw: "pi", proc: "robotd", file: "pi/robot/main.py", rate: "trạng thái 10 Hz",
+      d: "Phục vụ trang web, WebSocket /ws cho trình duyệt (lệnh vào, trạng thái ra 10 lần/giây), /grid.png, /camera.jpg. Endpoint /ws/voice chỉ nhận từ 127.0.0.1." },
+    slambridge: { x: 652, y: 340, t: "SlamBridge", s: "stdin / stdout", hw: "pi", proc: "robotd", file: "pi/robot/slam_bridge.py",
+      d: "Chạy slam_node làm tiến trình con. Ghi bản ghi nhị phân vào stdin (mẫu MCU, ảnh, lệnh text), đọc JSON từ stdout." },
+    arbiter: { x: 468, y: 450, t: "Phân xử lệnh lái", s: "web > nav > giọng nói", hw: "pi", proc: "robotd", file: "pi/robot/main.py (Robot.drive)",
+      d: "Một cửa cho mọi lệnh vận tốc. Web lái tay huỷ goto và lệnh giọng nói; giọng nói bị từ chối khi web đang điều khiển. Watchdog 0,4 s. Giảm tốc khi tiến theo khoảng trống phía trước (siêu âm) cho mọi nguồn lệnh." },
+    voice: { x: 652, y: 560, t: "VoiceControl", s: "odom vòng kín 20 Hz", hw: "pi", proc: "robotd", file: "pi/robot/voice.py", rate: "20 Hz",
+      d: "Chạy 'tiến/lùi N cm', 'xoay trái/phải N độ': đo quãng bằng số bước trung bình hai bánh, góc bằng gyro (bù bias khi đứng yên), dừng sớm theo vị trí dự đoán. Lệnh tiến gặp vật cản thì dừng và báo quãng đã đi." },
+    esplink: { x: 468, y: 670, t: "EspLink", s: "UART · đồng bộ giờ", hw: "pi", proc: "robotd", file: "pi/robot/esp_link.py", rate: "200 Hz",
+      d: "Đọc khung từ /dev/serial0, kiểm CRC, đổi đồng hồ micros() của ESP32 sang đồng hồ monotonic của Pi (cùng đồng hồ với camera), gửi lại lệnh VEL 10 lần/giây." },
+
+    frontend: { x: 848, y: 230, t: "Frontend ảnh trần", s: "ORB · nắn theo pitch", hw: "pi", proc: "slam", file: "pi/slam/src/frontend.cpp",
+      d: "Trích 500 điểm ORB trên ảnh trần và nắn tọa độ điểm theo góc chúi. Chỉ xử lý khung cần cho keyframe hoặc định vị." },
+    matcher: { x: 1012, y: 230, t: "Khớp ảnh", s: "similarity · keyframe", hw: "pi", proc: "slam", file: "pi/slam/src/matcher.cpp",
+      d: "Khớp ORB giữa hai khung bằng phép đồng dạng 2D, đổi ra chuyển động xe theo chiều cao trần. Keyframe mỗi 0,3 m hoặc 15°; nối 3 keyframe lân cận và tìm loop closure." },
+    ekf: { x: 848, y: 330, t: "EKF 2D", s: "bánh + gyro · ZUPT", hw: "pi", proc: "slam", file: "pi/slam/src/ekf2d.cpp", rate: "200 Hz",
+      d: "Trạng thái [x, y, θ, bias gyro]. Dự đoán bằng số bước và gyro (bù nghiêng). ZUPT lúc đứng yên chỉ sửa bias nên odometry không nhảy." },
+    graph: { x: 1012, y: 330, t: "Pose graph", s: "Ceres · loop closure", hw: "pi", proc: "slam", file: "pi/slam/src/pose_graph.cpp",
+      d: "Đồ thị tư thế: cạnh odometry và cạnh thị giác, tối ưu bằng Ceres với Huber; loop có chi² > 25 bị loại. Lưu / tải bản đồ." },
+    loc: { x: 848, y: 430, t: "Định vị", s: "T_map_odom · Kalman", hw: "pi", proc: "slam", file: "pi/slam/src/system.cpp",
+      d: "Ước lượng T_map_odom bằng bộ lọc Kalman 3 trạng thái, cổng chi² 11,34. Tái định vị trên bản đồ cũ cần 2 lần khớp nhất quán." },
+    grid: { x: 1012, y: 430, t: "Vùng đã đi", s: "lưới 5 cm", hw: "pi", proc: "slam", file: "pi/slam/src/traversed_grid.cpp",
+      d: "Dải ±5 cm quanh quỹ đạo tâm xe (planner chỉ đi trên đây) và dải rộng thân xe (hiển thị). Dựng lại từ quỹ đạo đã tối ưu sau mỗi lần đóng loop." },
+    obst: { x: 848, y: 530, t: "Lưới log-odds", s: "tĩnh + tạm · 5 cm", hw: "pi", proc: "slam", plan: 1, file: "pi/slam/src/obstacle_grid.cpp (mới)",
+      d: "Cách cập nhật như EGO-Planner (xem hình bên dưới): rải chùm 7 tia, mỗi ô một lần trúng/trống, log-odds kẹp [−1,99; 2,20], ngưỡng 1,386, phình 15 cm. Lớp tĩnh gắn keyframe (khi tạo bản đồ), lớp tạm tự quên τ 25 s." },
+    planner: { x: 1012, y: 530, t: "A* + replan", s: "8 hướng · phạt mép", hw: "pi", proc: "slam", file: "pi/slam/src/planner.cpp",
+      d: "A* 8 hướng trên lưới 5 cm, không cắt góc, phạt ô sát mép, waypoint mỗi 0,15 m. Trừ mặt nạ vật cản; đường phía trước bị chặn thì quét ±25°, chờ 3 s, chạy lại A* từ vị trí hiện tại; thử lại mỗi 2 s, quá 30 s thì huỷ." },
+    pp: { x: 1012, y: 640, t: "Pure pursuit", s: "lookahead 0,3 m", hw: "pi", proc: "slam", file: "pi/slam/src/controller.cpp", rate: "20 Hz",
+      d: "Bám đường trong frame odom: điểm nhìn trước 0,3 m theo chiều dài đường, xoay tại chỗ khi lệch > 50°, v ≤ 0,15 m/s. Trạng thái 'blocked', dừng 0,3 s sau khi xoay để siêu âm đo hướng mới, giới hạn v theo khoảng trống." },
+
+    wsserver: { x: 468, y: 784, t: "WS server /audio", s: ":8765 · nhận PCM", hw: "pi", proc: "speech", plan: 1,
+      d: "Speech-control mở WebSocket server cổng 8765, nhận khung PCM16 16 kHz từ ESP32 #2. Thay cho đọc mic I2S trên Pi bằng sounddevice; không cần overlay googlevoicehat." },
+    vad: { x: 468, y: 884, t: "Silero VAD", s: "cắt câu theo tiếng", hw: "pi", proc: "speech", file: "Speech-control/realtime_asr_streaming.py",
+      d: "Quyết định lúc bắt đầu và kết thúc câu (im lặng 0,6 s là chốt), giữ đệm 0,5 s trước khi VAD bật để không mất đầu câu." },
+    asr: { x: 652, y: 884, t: "Zipformer ASR", s: "streaming · onnx", hw: "pi", proc: "speech", file: "Speech-control/realtime_asr_streaming.py",
+      d: "hynt/Zipformer-30M-RNNT-Streaming-6000h chạy bằng sherpa-onnx: chunk 32, beam 4, 2 luồng CPU, Nice 5." },
+    parse: { x: 652, y: 784, t: "Từ điển + tách lệnh", s: "tiến lùi xoay dừng", hw: "pi", proc: "speech", file: "Speech-control/robot_commands.py",
+      d: "Sửa lỗi nhận dạng theo từ điển, đọc số tiếng Việt, tách lệnh rồi gửi move / turn / stop tới robotd qua /ws/voice." },
+  };
+  const HW = { esp: ["ESP32 #1", "esp"], espmic: ["ESP32 #2", "esp"], pi: ["Raspberry Pi 4", "pi"], web: ["Trình duyệt", "web"] };
+  const PROC = { robotd: "robotd", slam: "slam_node", speech: "Speech-control" };
+
+  // ================================================================ mũi tên: [id, từ, tới, nhãn, đường, kế hoạch]
+  const E = [
+    ["mpu-comp", "mpu", "comp", "acc + gyro 400 Hz"],
+    ["comp-angle", "comp", "anglepid", "góc chúi", [[378, 223], [390, 223], [390, 403], [378, 403]]],
+    ["spd-angle", "speedpi", "anglepid", "góc đặt"],
+    ["angle-integ", "anglepid", "integ", "gia tốc bánh"],
+    ["integ-spd", "integ", "speedpi", "tốc độ bánh (phản hồi)", [[378, 493], [402, 493], [402, 313], [378, 313]]],
+    ["integ-step", "integ", "stepisr", "bước/s trái, phải"],
+    ["step-a4988", "stepisr", "a4988", "STEP / DIR"],
+    ["link-spd", "link", "speedpi", "v đặt (đã làm mượt)", [[204, 670], [204, 306], [238, 306]]],
+    ["link-integ", "link", "integ", "t quay (vi sai)", [[220, 670], [220, 486], [238, 486]]],
+    ["hcsr-sonar", "hcsr", "sonar", "ECHO (ngắt)", null, 1],
+    ["sonar-spd", "sonar", "speedpi", "chặn tiến < 15 cm", [[174, 395], [190, 395], [190, 320], [238, 320]], 1],
+    ["mpu-link", "mpu", "link", "IMU thô 200 Hz", [[34, 223], [22, 223], [22, 682], [34, 682]]],
+    ["sonar-link", "sonar", "link", "khoảng cách (mm)", [[34, 410], [28, 410], [28, 704], [34, 704]], 1],
+    ["step-link", "stepisr", "link", "tổng số bước", [[308, 606], [308, 670]]],
+    ["link-esp", "link", "esplink", "IMU 200 Hz + SONAR", [[378, 683], [468, 683]]],
+    ["esp-link", "esplink", "link", "VEL:v,t · 10–20 Hz", [[468, 704], [378, 704]]],
+
+    ["inmp-i2s", "inmp", "i2s", "I2S 24 bit", null, 1],
+    ["i2s-ws", "i2s", "wsclient", "PCM16 · 20 ms", null, 1],
+    ["ws-audio", "wsclient", "wsserver", "WiFi · ws://pi:8765/audio", [[378, 965], [421, 965], [421, 807], [468, 807]], 1],
+
+    ["gcs-web", "gcs", "web", "lệnh JSON", [[700, 92], [700, 230]]],
+    ["web-gcs", "web", "gcs", "state 10 Hz · graph · grid", [[744, 230], [744, 92]]],
+    ["web-bridge", "web", "slambridge", "goto · nhiệm vụ · bản đồ", [[700, 276], [700, 340]]],
+    ["bridge-web", "slambridge", "web", "state · graph · grid", [[744, 340], [744, 276]]],
+    ["web-arb", "web", "arbiter", "lái tay WASD", [[652, 262], [628, 262], [628, 436], [560, 436], [560, 450]]],
+    ["cam-bridge", "camera", "slambridge", "ảnh xám 15 Hz", [[608, 246], [640, 246], [640, 356], [652, 356]]],
+    ["esp-bridge", "esplink", "slambridge", "mẫu MCU 200 Hz", [[600, 670], [668, 386]]],
+    ["esp-arb", "esplink", "arbiter", "khoảng trống phía trước", [[514, 670], [514, 496]], 1],
+    ["arb-esp", "arbiter", "esplink", "v, t đã giới hạn", [[566, 496], [566, 670]]],
+    ["esp-voice", "esplink", "voice", "bước + gyro", [[608, 680], [652, 600]]],
+    ["voice-arb", "voice", "arbiter", "v, t giọng nói", [[652, 572], [608, 468]]],
+    ["pp-arb", "pp", "arbiter", "cmd v, ω (stdout)", [[1082, 686], [1082, 714], [618, 714], [618, 488], [608, 488]]],
+
+    ["bridge-front", "slambridge", "frontend", "stdin: ảnh", [[792, 350], [820, 350], [820, 246], [848, 246]]],
+    ["bridge-ekf", "slambridge", "ekf", "stdin: MCU, lệnh", [[792, 362], [834, 362], [834, 350], [848, 350]]],
+    ["loc-bridge", "loc", "slambridge", "stdout: JSON", [[848, 453], [826, 453], [826, 376], [792, 376]]],
+    ["bridge-obst", "slambridge", "obst", "siêu âm + tư thế", [[792, 382], [816, 382], [816, 553], [848, 553]], 1],
+    ["front-match", "frontend", "matcher", "ORB 500 điểm"],
+    ["ekf-match", "ekf", "matcher", "odom + hiệp phương sai", [[988, 343], [1000, 343], [1000, 262], [1012, 262]]],
+    ["ekf-loc", "ekf", "loc", "odom"],
+    ["match-graph", "matcher", "graph", "cạnh thị giác, loop"],
+    ["match-loc", "matcher", "loc", "khớp với bản đồ", [[1152, 266], [1162, 266], [1162, 414], [970, 414], [970, 430]]],
+    ["graph-grid", "graph", "grid", "quỹ đạo tối ưu"],
+    ["graph-obst", "graph", "obst", "neo keyframe", [[1012, 368], [1004, 368], [1004, 520], [940, 520], [940, 530]], 1],
+    ["loc-plan", "loc", "planner", "vị trí trên bản đồ", [[988, 463], [996, 463], [996, 544], [1012, 544]]],
+    ["grid-plan", "grid", "planner", "ô đi được"],
+    ["obst-plan", "obst", "planner", "mặt nạ cấm 15 cm", null, 1],
+    ["plan-pp", "planner", "pp", "waypoint 0,15 m"],
+
+    ["audio-vad", "wsserver", "vad", "float32 16 kHz", null, 1],
+    ["vad-asr", "vad", "asr", "đoạn có tiếng"],
+    ["asr-parse", "asr", "parse", "câu nhận dạng"],
+    ["parse-voice", "parse", "voice", "/ws/voice · loopback"],
+  ];
+
+  // Chi tiết dữ liệu từng mũi tên: [kênh, nội dung, tần số]
+  const INFO = {
+    "mpu-comp": ["I2C 400 kHz", "acc[3], gyro[3]: int16 thô\n8192 LSB/g, 32,8 LSB/(°/s)\ngyro đã trừ offset", "400 Hz"],
+    "comp-angle": ["biến trong RAM", "angle: góc chúi (°), + = chúi tới\ngyroRate (°/s) cho thành phần D", "400 Hz"],
+    "spd-angle": ["biến trong RAM", "targetAngle (°), giới hạn ±10°", "400 Hz"],
+    "angle-integ": ["biến trong RAM", "accel (m/s²), giới hạn ±6\nchạm giới hạn → satLatch (cờ bit2)", "400 Hz"],
+    "integ-spd": ["biến trong RAM", "wheelSpeed (m/s) → speedFilt (lọc τ 0,1 s)", "400 Hz"],
+    "integ-step": ["Steppers::setSpeed", "trái = sps + dps, phải = sps − dps (bước/s)\n|trái| + |phải| ≤ 16000", "400 Hz"],
+    "step-a4988": ["GPIO", "STEP: xung (tối đa 16 kHz)\nDIR: mức logic · EN chung (LOW = chạy)", "tới 16 kHz"],
+    "link-spd": ["Link::speed()", "tốc độ đặt (m/s), kẹp ±0,35\nlàm mượt 0,4 m/s², 0,5 s không lệnh → 0", "đọc mỗi 2,5 ms"],
+    "link-integ": ["Link::turn()", "t (m/s chênh lệch mỗi bánh), kẹp ±0,20\n+ = quay phải", "đọc mỗi 2,5 ms"],
+    "hcsr-sonar": ["GPIO + ngắt", "TRIG: xung 10 µs\nECHO: độ rộng xung, 58 µs/cm\nlần lượt trái → giữa → phải, nghỉ 5 ms", "~15 Hz / cảm biến"],
+    "sonar-spd": ["biến trong RAM", "nếu cmdSpeed > 0 và (d_giữa < 150 mm hoặc d_bên < 120 mm)\n  → cmdSpeed = 0 (vẫn cho lùi, xoay)\nđổi trạng thái chặn → speedInt = 0", "400 Hz"],
+    "mpu-link": ["ImuPacket", "acc[3], gyro[3] int16\npitch float32 (rad, + = chúi tới)", "200 Hz"],
+    "sonar-link": ["khung SONAR 0x03 + SONAR_GEOM 0x04", "SONAR, mỗi số đo một khung 7 B: u32 t_us · u8 idx · u16 mm\n  0 = không có vang, 0xFFFF = lỗi cảm biến\nSONAR_GEOM: bảng vị trí cảm biến lấy từ SONAR_SENSORS trong config.h\n  (x, y mm · hướng 0,01° · nửa góc chùm · ngưỡng dừng khẩn)\n  gửi lúc khởi động, mỗi 2 s, khi Pi gửi INFO. Pi không có cấu hình vị trí cảm biến", "~15 Hz / cảm biến"],
+    "step-link": ["ImuPacket", "steps[2] int32: tổng số bước trái, phải (+ = lăn tới)", "200 Hz"],
+    "link-esp": ["UART 460800 8N1", "khung: A5 5A <type> <len> <payload> <crc8>, little-endian\n0x01 IMU 32 B (200 Hz, không đổi so với 2.1):\n  u32 t_us · i16 acc[3] · i16 gyro[3] · i32 steps[2]\n  u8 state · u8 flags · u16 seq · f32 pitch\n0x03 SONAR 7 B: u32 t_us · u8 idx · u16 mm\n0x04 SONAR_GEOM 4 + 9·n B: bảng vị trí cảm biến\n0x02 TEXT: ST:…, SONAR:STOP | CLEAR, INFO:…", "200 Hz + ~45 số đo/s"],
+    "esp-link": ["UART 460800", "dòng text \"VEL:<v>,<t>\\n\"\n  v m/s (+ tới), t m/s (+ quay phải)\nkiêm nhịp tim: 0,5 s không có → ESP32 dừng", "10–20 Hz"],
+    "inmp-i2s": ["I2S", "BCLK, WS, SD · 24 bit trong khung 32 bit\nchỉ lấy kênh trái (L/R = GND)", "16 kHz"],
+    "i2s-ws": ["bộ đệm DMA", "PCM16 little-endian mono\n320 mẫu = 640 B mỗi khung (20 ms)", "50 khung/s"],
+    "ws-audio": ["WebSocket qua WiFi", "mở kết nối: text {\"type\":\"hello\",\"rate\":16000,\"format\":\"s16le\"}\nsau đó: mỗi message nhị phân = 640 B PCM16\n≈ 32 kB/s; mất kết nối → nối lại sau 2 s", "50 msg/s"],
+    "gcs-web": ["WebSocket /ws (JSON)", "{type:drive, v, t} 10 Hz khi giữ phím · {type:stop}\n{type:goto, x, y} · {type:mission, points:[[x,y],…]}\n{type:goto_place, name} · save_map · load_map · new_map …", "theo thao tác"],
+    "web-gcs": ["WebSocket /ws (JSON)", "state: robot, camera, slam, voice, sonar (số đo, khoảng trống, lỗi)\ngraph · grid (ảnh /grid.png) · places · path · event · reply", "state 10 Hz"],
+    "web-bridge": ["SlamBridge.command()", "dòng lệnh text → bản ghi 'C' vào stdin\n\"goto 1.200 0.400\" · \"mission x1 y1 x2 y2 …\"\n\"save_map <id> <tên>\" · \"cancel <lý do>\"", "theo thao tác"],
+    "bridge-web": ["outbox (asyncio)", "JSON từ stdout chuyển cho mọi trình duyệt:\ngraph, grid, places, path, event, reply\nstate gộp vào bản tin state của robotd", "~10 Hz"],
+    "web-arb": ["Robot.drive(source='manual')", "v, t từ phím; huỷ goto và lệnh giọng nói\nghi web_drive_t (giọng nói bị chặn 2 s)", "10 Hz"],
+    "cam-bridge": ["SlamBridge.push_image", "ảnh xám 640×480 u8 + t (monotonic, giữa thời gian phơi)\nnode chưa nhận khung trước → bỏ khung này", "15 Hz"],
+    "esp-bridge": ["push_mcu / push_sonar / push_sonar_geom", "'M' McuRecord 52 B: f64 t · u32 t_us · u16 seq · i32 steps[2]\n  f32 gyro[3] rad/s · f32 acc[3] m/s² · f32 pitch · u8 state · u8 flags\n'S' SonarRecord 11 B: f64 t (đồng hồ Pi) · u8 idx · u16 mm\n'G' nguyên khung SONAR_GEOM của ESP32\n(cùng định dạng file log .slamlog để replay)", "200 Hz + ~45/s"],
+    "esp-arb": ["thuộc tính EspLink", "khoảng trống phía trước d (m):\n  giữa, và cảm biến bên nếu vật nằm trong hành lang thân xe\ntuổi số đo (> 0,5 s → coi như không biết)", "200 Hz"],
+    "arb-esp": ["EspLink.set_velocity", "v, t sau giới hạn: |v| ≤ 0,20, |t| ≤ 0,10\nv ≤ v_max·(d − 0,15)/(0,50 − 0,15) khi tiến\nwatchdog 0,4 s không có lệnh mới → 0", "gửi lại 10 Hz"],
+    "esp-voice": ["VoiceControl.on_imu", "steps → quãng (m) · gyro + pitch → tốc độ quay trục đứng\nbias gyro học khi xe đứng yên", "200 Hz"],
+    "voice-arb": ["Robot.drive(source='voice')", "v, t (t = −ω·b/2) theo profile hãm √(2·a·còn lại)", "20 Hz"],
+    "pp-arb": ["stdout → on_cmd", "{\"type\":\"cmd\",\"v\":…,\"w\":…,\"t\":…,\"active\":true}\nt = −ω·wheel_base/2 · Robot.drive(source='nav')", "20 Hz"],
+    "bridge-front": ["stdin bản ghi 'I'", "f64 t · u16 w · u16 h · w·h byte ảnh xám", "≤ 15 Hz"],
+    "bridge-ekf": ["stdin bản ghi 'M' / 'C'", "McuRecord 200 Hz\nlệnh text (goto, mission, save_map …)", "200 Hz"],
+    "loc-bridge": ["stdout JSON dòng", "state: pose map, σ, nav, quality, reloc, frames …\ngraph, grid, places, path, event, reply", "state 10 Hz"],
+    "bridge-obst": ["trong slam_node", "sonar_mm[k] + tư thế odom nội suy tại t + pitch\ncổng: |pitch| ≤ 8°, dời ≥ 3 cm hoặc xoay ≥ 3°\n→ rải 7 tia, cập nhật log-odds (xem hình dưới)", "≤ 15 Hz / cảm biến"],
+    "front-match": ["FrameFeatures", "≤ 500 keypoint (px đã nắn, gốc ở tâm ảnh)\ndescriptor ORB 32 B mỗi điểm", "theo keyframe / định vị"],
+    "ekf-match": ["Job (worker)", "odom tại thời điểm ảnh\nhiệp phương sai tương đối từ keyframe trước", "theo keyframe"],
+    "ekf-loc": ["OdomSnap", "odom (x, y, θ) + P 3×3: độ trôi làm nhiễu quá trình", "200 Hz"],
+    "match-graph": ["VisualEdge", "(a, b, α, tx, ty, f, inliers) → đo tương đối Pose2 + hiệp phương sai", "theo keyframe"],
+    "match-loc": ["đo T_map_odom", "khớp khung hiện tại với keyframe bản đồ\n→ tư thế đo, số inlier; cần 2 lần nhất quán để tái định vị", "2 Hz"],
+    "graph-grid": ["rebuildGrid()", "quỹ đạo keyframe đã tối ưu + mẫu odom giữa các keyframe\n→ dải ±5 cm (center) và ±10 cm (footprint)", "sau mỗi lần tối ưu"],
+    "graph-obst": ["rebuild lớp tĩnh", "tư thế keyframe đã tối ưu\n→ chiếu lại mọi số đo gắn keyframe vào lưới tĩnh", "sau mỗi lần tối ưu"],
+    "loc-plan": ["tư thế xe trên map", "T_map_odom ∘ odom (x, y, θ)", "khi lập đường"],
+    "grid-plan": ["TraversedGrid", "center (u8, 5 cm) + distance transform → ô đi được, phạt mép", "khi lập đường"],
+    "obst-plan": ["mặt nạ u8", "ô có L > 1,386 (tĩnh ∪ tạm), phình đĩa 15 cm\n→ ô cấm cho A* và cho kiểm tra 'đường bị chặn'", "khi lập đường + 20 Hz kiểm tra"],
+    "plan-pp": ["Controller::start", "waypoint (map) mỗi 0,15 m + chỉ số điểm phải chạm (nhiệm vụ)\nhướng cuối tuỳ chọn", "khi lập / lập lại đường"],
+    "audio-vad": ["hàng đợi trong tiến trình", "float32 16 kHz, khối 512 mẫu (32 ms)\nlọc DC + khuếch đại (--gain)", "31 khối/s"],
+    "vad-asr": ["stream.accept_waveform", "mẫu thô từ lúc VAD bật (gồm 0,5 s đệm trước)\nchốt câu khi im 0,6 s", "theo câu"],
+    "asr-parse": ["chuỗi Python", "câu tiếng Việt thô, vd \"tiếng mười xăng ti mét\"", "theo câu"],
+    "parse-voice": ["WebSocket ws://127.0.0.1:8080/ws/voice", "{\"type\":\"move\",\"distance_m\":0.10,\"text\":…}\n{\"type\":\"turn\",\"angle_deg\":-90} · {\"type\":\"stop\"}\n+ hello · listening · partial · heard (hiển thị trên web)", "theo câu"],
+  };
+
+  // ================================================================ luồng: bước = [mô tả, [mũi tên]]
+  const PID = ["mpu-comp", "comp-angle", "spd-angle", "angle-integ", "integ-spd", "integ-step", "step-a4988"];
+  const TO_MCU = ["arb-esp", "esp-link", "link-spd", "link-integ"];
+  const FLOWS = [
+    { id: "all", name: "Tổng quan", c: "var(--ink)",
+      d: "Toàn bộ hệ thống chia theo phần cứng. ESP32 #1 giữ thăng bằng và không phụ thuộc Pi; Pi 4 chạy SLAM, lập đường, web và nhận dạng giọng nói; ESP32 #2 chỉ thu âm và gửi qua WiFi.", steps: null },
+    { id: "pid", name: "Cân bằng PID", c: "var(--f-pid)",
+      d: "PID tầng chạy hoàn toàn trên ESP32 #1 ở 400 Hz. Pi chỉ đổi tốc độ đặt; mất liên lạc với Pi thì xe vẫn đứng.",
+      steps: [["MPU-6050 → bộ lọc bù ra góc chúi.", ["mpu-comp"]],
+        ["PI tốc độ: tốc độ đặt − tốc độ bánh → góc nghiêng đặt (±10°).", ["spd-angle"]],
+        ["PID góc: góc chúi − góc đặt → gia tốc bánh (≤ 6 m/s²).", ["comp-angle", "angle-integ"]],
+        ["Tích phân ra tốc độ bánh, phản hồi về PI tốc độ.", ["integ-spd"]],
+        ["Cộng vi sai quay, Step ISR phát xung cho hai A4988.", ["integ-step", "step-a4988"]]] },
+    { id: "manual", name: "Lái tay (web)", c: "var(--f-manual)",
+      d: "Lái bằng W A S D trên web. Lệnh tay luôn được ưu tiên: huỷ goto, nhiệm vụ và lệnh giọng nói đang chạy.",
+      steps: [["Trình duyệt gửi {type: drive, v, t} 10 lần/giây khi giữ phím.", ["gcs-web"]],
+        ["Phân xử: huỷ goto + giọng nói, giới hạn tốc độ (và theo siêu âm).", ["web-arb"]],
+        ["EspLink gửi VEL:v,t qua UART.", ["arb-esp", "esp-link"]],
+        ["ESP32 làm mượt: v → tốc độ đặt, t → vi sai quay.", ["link-spd", "link-integ"]],
+        ["Vòng PID tầng thực hiện.", PID]] },
+    { id: "slam", name: "SLAM trần", c: "var(--f-slam)",
+      d: "Odometry bánh + gyro cho chuyển động ngắn hạn, ảnh trần sửa trôi bằng keyframe và loop closure.",
+      steps: [["ESP32 gửi IMU, tổng số bước, pitch 200 Hz.", ["mpu-link", "step-link", "link-esp"]],
+        ["EspLink quy đổi đồng hồ, SlamBridge ghi mẫu MCU và ảnh trần vào stdin.", ["esp-bridge", "cam-bridge", "bridge-ekf", "bridge-front"]],
+        ["EKF 2D dự đoán bằng bánh + gyro.", ["ekf-match", "ekf-loc"]],
+        ["Frontend trích ORB, khớp ảnh tạo keyframe / loop.", ["front-match", "match-graph"]],
+        ["Pose graph tối ưu, vùng đã đi dựng lại.", ["graph-grid"]],
+        ["Định vị sửa T_map_odom, trạng thái lên web.", ["match-loc", "loc-bridge", "bridge-web", "web-gcs"]]] },
+    { id: "goto", name: "Goto / nhiệm vụ", c: "var(--f-goto)",
+      d: "Bấm điểm hoặc chuỗi điểm. Đường chỉ đi trên vùng xe đã đi qua, trừ ô vật cản.",
+      steps: [["Web gửi goto / mission, SlamBridge chuyển thành lệnh text.", ["gcs-web", "web-bridge", "bridge-ekf"]],
+        ["A* từ vị trí định vị trên vùng đã đi, trừ mặt nạ vật cản.", ["loc-plan", "grid-plan", "obst-plan"]],
+        ["Waypoint 0,15 m → pure pursuit 20 Hz.", ["plan-pp"]],
+        ["cmd ra stdout → Phân xử → VEL xuống ESP32.", ["pp-arb", ...TO_MCU]]] },
+    { id: "obst", name: "Vật cản (siêu âm)", c: "var(--f-obst)",
+      d: "Ba lớp bảo vệ. Firmware dừng khẩn không phụ thuộc Pi; robotd giảm tốc cho mọi nguồn lệnh; slam_node nhớ vật cản bằng log-odds kiểu EGO và chạy lại A*.",
+      steps: [["3 HC-SR04 đo lần lượt; ESP32 chặn lệnh tiến khi vật < 15 cm.", ["hcsr-sonar", "sonar-spd"]],
+        ["Mỗi số đo một khung SONAR lên Pi; ESP32 gửi kèm bảng vị trí cảm biến (SONAR_GEOM).", ["sonar-link", "link-esp"]],
+        ["Phân xử giảm tốc theo d cho web, goto, giọng nói.", ["esp-arb"]],
+        ["slam_node: rải chùm 7 tia, cập nhật log-odds (cổng theo vị trí).", ["esp-bridge", "bridge-obst"]],
+        ["Lớp tĩnh dựng lại theo keyframe đã tối ưu.", ["graph-obst"]],
+        ["Ngưỡng + phình 15 cm → mặt nạ; đường bị chặn: quét, chờ 3 s, chạy lại A*.", ["obst-plan", "plan-pp", "pp-arb"]]] },
+    { id: "voice", name: "Giọng nói", c: "var(--f-voice)",
+      d: "Mic trên ESP32 #2 gửi PCM thô qua WiFi; Pi là server và nhận dạng. Web luôn được ưu tiên hơn giọng nói.",
+      steps: [["INMP441 → ESP32 #2 đọc I2S DMA, đổi PCM16 khung 20 ms.", ["inmp-i2s", "i2s-ws"]],
+        ["WebSocket client gửi khung nhị phân tới Pi :8765.", ["ws-audio"]],
+        ["Silero VAD cắt câu, Zipformer nhận dạng.", ["audio-vad", "vad-asr"]],
+        ["Từ điển + tách lệnh → /ws/voice của robotd.", ["asr-parse", "parse-voice"]],
+        ["VoiceControl đo bằng bước + gyro → Phân xử (web ưu tiên).", ["esp-voice", "voice-arb"]],
+        ["VEL xuống ESP32.", TO_MCU]] },
+  ];
+  FLOWS.forEach((f) => { f.edges = f.steps ? [...new Set(f.steps.flatMap((s) => s[1]))] : []; });
+
+  // ================================================================ vẽ sơ đồ chính
+  const svg = document.getElementById("dia");
+  const defs = el("defs", {}, svg);
+  function marker(id, fill) {
+    const m = el("marker", { id, viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" }, defs);
+    const p = el("path", { d: "M0,0 L10,5 L0,10 z" }, m);
+    if (fill.startsWith("mk-")) p.setAttribute("class", fill); else p.style.fill = fill;
+  }
+  marker("ah", "mk-default"); marker("ah-ink", "mk-ink");
+  FLOWS.forEach((f) => marker("ah-" + f.id, f.c));
+
+  const gFrames = el("g", {}, svg), gEdges = el("g", {}, svg), gNodes = el("g", {}, svg), gLabels = el("g", {}, svg);
+  FRAMES.forEach((f) => {
+    const g = el("g", { class: "frame " + f.cls, "data-id": f.id }, gFrames);
+    el("rect", { x: f.x, y: f.y, width: f.w, height: f.h, rx: f.cls.startsWith("proc") ? 6 : 10 }, g);
+    el("text", { x: f.x + 12, y: f.y + 19, class: "fl" }, g).textContent = f.label;
+    el("text", { x: f.x + f.w - 12, y: f.y + 18, class: "ft", "text-anchor": "end" }, g).textContent = f.tag;
+  });
+
+  const box = (id) => { const n = N[id]; return { x: n.x, y: n.y, w: n.w || W, h: H }; };
+  function autoPts(a, b) {
+    const A = box(a), B = box(b);
+    const ac = [A.x + A.w / 2, A.y + A.h / 2], bc = [B.x + B.w / 2, B.y + B.h / 2];
+    const dx = bc[0] - ac[0], dy = bc[1] - ac[1];
+    if (Math.abs(dx) > Math.abs(dy)) return [[dx > 0 ? A.x + A.w : A.x, ac[1]], [dx > 0 ? B.x : B.x + B.w, bc[1]]];
+    const s = [ac[0], dy > 0 ? A.y + A.h : A.y], t = [bc[0], dy > 0 ? B.y : B.y + B.h];
+    if (Math.abs(s[0] - t[0]) < 1) return [s, t];
+    const my = (s[1] + t[1]) / 2;
+    return [s, [s[0], my], [t[0], my], t];
+  }
+  const pathD = (pts) => "M" + pts.map((p) => p[0] + "," + p[1]).join(" L");
+
+  const edgeEls = {};
+  E.forEach(([id, a, b, label, route, plan]) => {
+    const d = pathD(route || autoPts(a, b));
+    const g = el("g", { class: "edge" + (plan ? " plan" : ""), "data-id": id, tabindex: "0", role: "button", "aria-label": `${N[a].t} → ${N[b].t}: ${label}` }, gEdges);
+    el("path", { class: "hit", d }, g);
+    const ln = el("path", { class: "ln", d, "marker-end": "url(#ah)" }, g);
+    const lbl = el("g", { class: "lbl" }, gLabels);
+    edgeEls[id] = { g, ln, lbl, label, a, b, plan };
+    g.addEventListener("mouseenter", () => lbl.classList.add("hover"));
+    g.addEventListener("mouseleave", () => lbl.classList.remove("hover"));
+    g.addEventListener("click", (e) => { e.stopPropagation(); select("e:" + id); });
+    g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select("e:" + id); } });
+  });
+
+  Object.entries(N).forEach(([id, n]) => {
+    const w = n.w || W;
+    const g = el("g", { class: "node" + (n.dev ? " dev" : "") + (n.plan ? " plan" : ""), "data-id": id, tabindex: "0", role: "button", "aria-label": `${n.t}: ${n.s}` }, gNodes);
+    el("rect", { class: "box", x: n.x, y: n.y, width: w, height: H, rx: n.dev ? 2 : 6 }, g);
+    if (n.dev) for (let k = 0; k < 3; k++) {
+      const py = n.y + 12 + k * 11;
+      el("line", { class: "pin", x1: n.x - 5, y1: py, x2: n.x, y2: py }, g);
+      el("line", { class: "pin", x1: n.x + w, y1: py, x2: n.x + w + 5, y2: py }, g);
+    }
+    el("text", { class: "t", x: n.x + 10, y: n.y + 19 }, g).textContent = n.t;
+    el("text", { class: "s", x: n.x + 10, y: n.y + 35 }, g).textContent = n.s;
+    if (n.plan) el("text", { class: "tag", x: n.x + w - 6, y: n.y - 4, "text-anchor": "end" }, g).textContent = "MỚI";
+    g.addEventListener("click", (e) => { e.stopPropagation(); select("n:" + id); });
+    g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select("n:" + id); } });
+  });
+  gNodes.parentNode.appendChild(gLabels);   // nhãn trên cùng
+
+  function placeLabels() {
+    Object.values(edgeEls).forEach((ed) => {
+      ed.lbl.textContent = "";
+      const L = ed.ln.getTotalLength(), p = ed.ln.getPointAtLength(L / 2);
+      const r = el("rect", { y: p.y - 8, height: 16, rx: 3 }, ed.lbl);
+      const tx = el("text", { x: p.x, y: p.y + 3.5, "text-anchor": "middle" }, ed.lbl);
+      tx.textContent = ed.label;
+      let bw = ed.label.length * 6.1 + 10;
+      try { bw = tx.getComputedTextLength() + 10; } catch (_) {}
+      r.setAttribute("x", p.x - bw / 2); r.setAttribute("width", bw);
+    });
+  }
+  placeLabels();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(placeLabels);
+
+  // ================================================================ tương tác
+  let flow = "all", selected = null;
+  const flowsEl = document.getElementById("flows"), panel = document.getElementById("panel");
+  try { const f = localStorage.getItem("iotck-flow"); if (f && FLOWS.some((x) => x.id === f)) flow = f; } catch (_) {}
+  FLOWS.forEach((f) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.dataset.flow = f.id; b.style.setProperty("--c", f.c);
+    b.innerHTML = `<i></i>${esc(f.name)}`;
+    b.addEventListener("click", () => { selected = null; flow = f.id; try { localStorage.setItem("iotck-flow", f.id); } catch (_) {} render(); });
+    flowsEl.appendChild(b);
+  });
+  svg.addEventListener("click", () => { if (selected) { selected = null; render(); } });
+  function select(key) { selected = selected === key ? null : key; render(); }
+
+  function hot(ids) {
+    Object.entries(edgeEls).forEach(([id, ed]) => {
+      const h = ids.includes(id);
+      ed.g.classList.toggle("hot", h);
+      ed.lbl.classList.toggle("hot", h);
+    });
+  }
+
+  function render() {
+    const f = FLOWS.find((x) => x.id === flow);
+    flowsEl.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.flow === flow)));
+    const onEdges = new Set(), onNodes = new Set();
+    let color = f.c, mk = "ah-" + f.id;
+    if (selected && selected.startsWith("n:")) {
+      const nid = selected.slice(2);
+      E.forEach(([id, a, b]) => { if (a === nid || b === nid) { onEdges.add(id); onNodes.add(a); onNodes.add(b); } });
+      color = "var(--ink)"; mk = "ah-ink";
+    } else if (selected && selected.startsWith("e:")) {
+      const ed = edgeEls[selected.slice(2)];
+      onEdges.add(selected.slice(2)); onNodes.add(ed.a); onNodes.add(ed.b);
+      color = "var(--ink)"; mk = "ah-ink";
+    } else {
+      f.edges.forEach((id) => { onEdges.add(id); onNodes.add(edgeEls[id].a); onNodes.add(edgeEls[id].b); });
+    }
+    svg.classList.toggle("focus", onEdges.size > 0);
+    svg.style.setProperty("--fc", color);
+    Object.entries(edgeEls).forEach(([id, ed]) => {
+      const on = onEdges.has(id);
+      ed.g.classList.toggle("on", on);
+      ed.g.classList.toggle("sel", selected === "e:" + id);
+      ed.lbl.classList.toggle("on", on);
+      ed.ln.setAttribute("marker-end", `url(#${on ? mk : "ah"})`);
+    });
+    hot([]);
+    gNodes.querySelectorAll(".node").forEach((g) => {
+      g.classList.toggle("on", onNodes.has(g.dataset.id));
+      g.classList.toggle("sel", selected === "n:" + g.dataset.id);
+    });
+    gFrames.querySelectorAll(".frame.proc").forEach((g) => g.classList.toggle("on", [...onNodes].some((n) => N[n].proc === g.dataset.id)));
+    if (!selected) panelFlow(f);
+    else if (selected.startsWith("n:")) panelNode(selected.slice(2));
+    else panelEdge(selected.slice(2));
+  }
+
+  function panelFlow(f) {
+    let h = `<div class="eyebrow">Luồng</div><h2>${esc(f.name)}</h2><p>${esc(f.d)}</p>`;
+    if (f.steps) {
+      h += `<ol class="steps">${f.steps.map((s, i) => `<li tabindex="0" data-step="${i}">${esc(s[0])}<small>${s[1].map((id) => esc(edgeEls[id].label)).join(" · ")}</small></li>`).join("")}</ol>`;
+    } else {
+      h += `<div class="legend">
+        <div><svg viewBox="0 0 34 16"><rect x="2" y="2" width="30" height="12" rx="3" fill="none" stroke="var(--esp)" stroke-width="1.6"/></svg><span>Khung thiết bị (ESP32 xanh, Pi đỏ, trình duyệt tím xám)</span></div>
+        <div><svg viewBox="0 0 34 16"><rect x="2" y="2" width="30" height="12" rx="3" fill="none" stroke="var(--proc)" stroke-dasharray="2 3"/></svg><span>Tiến trình trên Pi</span></div>
+        <div><svg viewBox="0 0 34 16"><rect x="7" y="3" width="20" height="10" rx="1" fill="var(--node)" stroke="var(--ink)" stroke-width="2"/><line x1="2" y1="8" x2="7" y2="8" stroke="var(--ink)"/><line x1="27" y1="8" x2="32" y2="8" stroke="var(--ink)"/></svg><span>Linh kiện ngoại vi</span></div>
+        <div><svg viewBox="0 0 34 16"><rect x="2" y="3" width="30" height="10" rx="3" fill="var(--node)" stroke="var(--ink)" stroke-dasharray="5 3.5"/></svg><span>Mới làm, chưa thử trên xe thật</span></div>
+      </div><p style="margin-top:12px">Bấm một luồng ở trên để xem từng bước, hoặc bấm thẳng vào một mũi tên để xem gói dữ liệu.</p>`;
+    }
+    panel.innerHTML = h;
+    panel.querySelectorAll("[data-step]").forEach((li) => {
+      const ids = f.steps[+li.dataset.step][1];
+      li.addEventListener("mouseenter", () => hot(ids)); li.addEventListener("focus", () => hot(ids));
+      li.addEventListener("mouseleave", () => hot([])); li.addEventListener("blur", () => hot([]));
+    });
+  }
+  function backBtn() {
+    const b = panel.querySelector("#back");
+    if (b) b.addEventListener("click", () => { selected = null; render(); });
+  }
+  function panelNode(id) {
+    const n = N[id], hw = HW[n.hw];
+    let h = `<button class="back" type="button" id="back">← ${esc(FLOWS.find((x) => x.id === flow).name)}</button>
+      <div class="eyebrow">Khối</div><h2>${esc(n.t)}</h2><div class="chips"><span class="chip ${hw[1]}">${esc(hw[0])}</span>`;
+    if (n.proc) h += `<span class="chip">${esc(PROC[n.proc])}</span>`;
+    if (n.rate) h += `<span class="chip">${esc(n.rate)}</span>`;
+    h += `<span class="chip${n.plan ? " plan" : ""}">${n.plan ? "mới, chưa thử xe" : "đã chạy trên xe"}</span></div><p>${esc(n.d)}</p>`;
+    if (n.file) h += `<p><code>${esc(n.file)}</code></p>`;
+    const ins = E.filter((e) => e[2] === id), outs = E.filter((e) => e[1] === id);
+    const row = (e, other) => `<button type="button" data-edge="${e[0]}"><b>${esc(N[other].t)}</b><span>${esc(e[3])}</span></button>`;
+    h += `<div class="io">`;
+    if (ins.length) h += `<h3>Vào</h3>` + ins.map((e) => row(e, e[1])).join("");
+    if (outs.length) h += `<h3>Ra</h3>` + outs.map((e) => row(e, e[2])).join("");
+    h += `</div>`;
+    panel.innerHTML = h;
+    backBtn();
+    panel.querySelectorAll("[data-edge]").forEach((b) => b.addEventListener("click", () => select("e:" + b.dataset.edge)));
+  }
+  function panelEdge(id) {
+    const ed = edgeEls[id], inf = INFO[id] || ["", "", ""];
+    const A = N[ed.a], B = N[ed.b];
+    const hwChip = (n) => `<span class="chip ${HW[n.hw][1]}">${esc(HW[n.hw][0])}${n.proc ? " · " + esc(PROC[n.proc]) : ""}</span>`;
+    let h = `<button class="back" type="button" id="back">← ${esc(FLOWS.find((x) => x.id === flow).name)}</button>
+      <div class="eyebrow">Dữ liệu</div><h2>${esc(A.t)} → ${esc(B.t)}</h2>
+      <div class="chips">${hwChip(A)}<span class="chip">→</span>${hwChip(B)}</div>
+      <div class="chips"><span class="chip">${esc(inf[0])}</span><span class="chip">${esc(inf[2])}</span><span class="chip${ed.plan ? " plan" : ""}">${ed.plan ? "mới, chưa thử xe" : "đã chạy trên xe"}</span></div>
+      <pre class="payload">${esc(inf[1])}</pre>
+      <div class="io"><h3>Hai đầu</h3>
+        <button type="button" data-node="${ed.a}"><b>${esc(A.t)}</b><span>${esc(A.s)}</span></button>
+        <button type="button" data-node="${ed.b}"><b>${esc(B.t)}</b><span>${esc(B.s)}</span></button></div>`;
+    const inFlows = FLOWS.filter((f) => f.edges.includes(id)).map((f) => f.name);
+    if (inFlows.length) h += `<p class="eyebrow" style="margin-top:6px">Thuộc luồng: ${esc(inFlows.join(", "))}</p>`;
+    panel.innerHTML = h;
+    backBtn();
+    panel.querySelectorAll("[data-node]").forEach((b) => b.addEventListener("click", () => select("n:" + b.dataset.node)));
+  }
+  render();
+
+  // ================================================================ hình lưới log-odds (tính thật)
+  const CS = 10, GX = 40, GY = 28;            // ô 10 px = 5 cm → 2,0 × 1,4 m
+  const OX = 0, OY = 10;
+  const truth = [[19, 6], [20, 6], [21, 6], [19, 7], [20, 7], [21, 7]];   // hộp 15 × 10 cm
+  const isTruth = new Set(truth.map(([i, j]) => i + "," + j));
+  const P_HIT = 0.619, P_MISS = -0.619, LMIN = -1.992, LMAX = 2.197, LOCC = 1.386;
+  const HALF = 15 * Math.PI / 180, RAYS = 7, RMAX = 2.0 / 0.05;   // tầm 2 m = 40 ô
+  // các vị trí đo (ô, hướng °): xe tiến lại gần và lệch dần; mỗi vị trí đã qua cổng "dời ≥ 3 cm / xoay ≥ 3°"
+  const POSES = [
+    [12, 26, -60], [16, 26, -78], [22, 26, -95], [27, 25, -112], [9, 22, -40], [30, 21, -135],
+    [14, 21, -70], [25, 20, -115], [18, 19, -88], [6, 15, -20],
+  ];
+  const MODES = [["1 lần đo", 1], ["3 vị trí", 3], ["6 vị trí", 6], ["10 vị trí", 10]];
+  let ogMode = 1;
+  const ogsvg = document.getElementById("ogsvg"), ogseg = document.getElementById("ogseg"), ogstat = document.getElementById("ogstat");
+  MODES.forEach(([name, k]) => {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = name; b.dataset.k = k;
+    b.addEventListener("click", () => { ogMode = k; drawOg(); });
+    ogseg.appendChild(b);
+  });
+
+  function measure(px, py, hd) {   // khoảng cách tới ô vật thật gần nhất trong nón
+    let best = Infinity;
+    truth.forEach(([i, j]) => {
+      const dx = i + 0.5 - px, dy = j + 0.5 - py, r = Math.hypot(dx, dy);
+      let a = Math.atan2(dy, dx) - hd * Math.PI / 180;
+      a = Math.atan2(Math.sin(a), Math.cos(a));
+      if (Math.abs(a) <= HALF + Math.atan2(0.5, r) && r < best) best = r;   // ô có phần nằm trong nón
+    });
+    return best <= RMAX ? best : null;
+  }
+  function update(L, px, py, hd) {
+    const d = measure(px, py, hd);
+    const hits = new Map(), tot = new Map(), wmax = new Map();
+    const bump = (m, k, v = 1) => m.set(k, (m.get(k) || 0) + v);
+    const rays = [];
+    for (let r = 0; r < RAYS; r++) {
+      const off = -HALF + (2 * HALF * r) / (RAYS - 1), a = hd * Math.PI / 180 + off;
+      const w = 1 - 0.5 * Math.abs(off) / HALF;
+      const reach = d === null ? 1.0 / 0.05 : d;
+      const seen = new Set();
+      for (let s = 0.5; s <= reach + 0.6; s += 0.25) {    // bước nhỏ ~ Bresenham
+        const i = Math.floor(px + Math.cos(a) * s), j = Math.floor(py + Math.sin(a) * s), k = i + "," + j;
+        if (i < 0 || j < 0 || i >= GX || j >= GY || seen.has(k)) continue;
+        seen.add(k);
+        if (d !== null && Math.abs(s - d) <= 0.6) { bump(hits, k); bump(tot, k); wmax.set(k, Math.max(wmax.get(k) || 0, w)); }
+        else if (s < reach - 1) bump(tot, k);
+      }
+      rays.push([a, reach]);
+    }
+    tot.forEach((n, k) => {    // mỗi ô một lần: trúng nếu số tia trúng ≥ số tia trống (như EGO)
+      const h = hits.get(k) || 0;
+      const du = h >= n - h ? P_HIT * (wmax.get(k) || 1) : P_MISS;
+      L.set(k, Math.min(LMAX, Math.max(LMIN, (L.get(k) || 0) + du)));
+    });
+    return { d, rays };
+  }
+  function drawOg() {
+    ogseg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.k === ogMode)));
+    const L = new Map();
+    const shots = POSES.slice(0, ogMode).map(([x, y, h]) => ({ x, y, h, ...update(L, x, y, h) }));
+    ogsvg.textContent = "";
+    let nOcc = 0, nOccTrue = 0, nCand = 0;
+    for (let j = 0; j < GY; j++) for (let i = 0; i < GX; i++) {
+      const v = L.get(i + "," + j);
+      let cls = "cell";
+      if (v !== undefined) {
+        if (v > LOCC) { cls += " occ"; nOcc++; if (isTruth.has(i + "," + j)) nOccTrue++; }
+        else if (v > 0) { cls += " cand"; nCand++; }
+        else if (v < 0) cls += " free";
+      }
+      el("rect", { class: cls, x: OX + i * CS, y: OY + j * CS, width: CS, height: CS }, ogsvg);
+    }
+    const xs = truth.map((t) => t[0]), ys = truth.map((t) => t[1]);
+    el("rect", { class: "truth", x: OX + Math.min(...xs) * CS, y: OY + Math.min(...ys) * CS,
+      width: (Math.max(...xs) - Math.min(...xs) + 1) * CS, height: (Math.max(...ys) - Math.min(...ys) + 1) * CS }, ogsvg);
+    shots.forEach((s, idx) => {
+      const cx = OX + s.x * CS, cy = OY + s.y * CS;
+      const last = idx === shots.length - 1;
+      if (last) {
+        s.rays.forEach(([a, r]) => el("line", { class: "ray", x1: cx, y1: cy, x2: cx + Math.cos(a) * r * CS, y2: cy + Math.sin(a) * r * CS }, ogsvg));
+        const R = (s.d ?? 20) * CS, a0 = s.h * Math.PI / 180 - HALF, a1 = s.h * Math.PI / 180 + HALF;
+        el("path", { class: "cone", d: `M${cx},${cy} L${cx + Math.cos(a0) * R},${cy + Math.sin(a0) * R} A${R},${R} 0 0 1 ${cx + Math.cos(a1) * R},${cy + Math.sin(a1) * R} Z` }, ogsvg);
+      }
+      el("circle", { class: "sensor", cx, cy, r: last ? 4.5 : 3 }, ogsvg);
+      el("text", { x: cx + 6, y: cy + 3 }, ogsvg).textContent = String(idx + 1);
+    });
+    el("text", { x: 4, y: 7 }, ogsvg).textContent = "lưới 5 cm · 2,0 × 1,4 m · nón ±15°, 7 tia";
+    const last = shots[shots.length - 1];
+    ogstat.textContent = `Lần đo ${shots.length}: d = ${last.d === null ? "không vang" : (last.d * 5).toFixed(0) + " cm"} · ` +
+      `ô vật cản ${nOcc} (đúng vật thật ${nOccTrue}/${truth.length}) · ô ứng viên ${nCand}`;
+  }
+  drawOg();
+})();
+</script>
+
+<script>
+(() => {
+  // ================================================================ sơ đồ nguồn + mass (lắp mạch)
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs = {}, parent) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  };
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const svg = document.getElementById("wsvg"), panel = document.getElementById("wpanel");
+  if (!svg) return;
+
+  // Lớp: motor (pin + dòng động cơ), logic (5 V), gnd (mass), sig (tín hiệu), part (tụ / trở)
+  // d: [lắp ở / nối, giá trị / thông số, vì sao]
+  const BOX = {
+    pack1: { x: 20, y: 40, w: 170, h: 64, t: "Khay 1 · động cơ trái", s: "4S 18650 · 12–16,8 V", k: "batt", layer: "motor",
+      d: ["Cực + → công tắc + cầu chì → VMOT A4988 trái. Cực − → GND (phía VMOT) A4988 trái bằng dây riêng.",
+        "4S Li-ion: 16,8 V đầy, 14,8 V danh định, ~12 V cạn (3,0 V/cell). A4988 chịu VMOT 8–35 V.",
+        "Mỗi khay chỉ cấp cho một A4988. Không nối song song hai khay động cơ: lệch áp thì khay đầy sạc ngược khay vơi với dòng rất lớn. Muốn gộp: mỗi khay qua một diode Schottky SS54 (5 A, 40 V)."] },
+    pack2: { x: 20, y: 230, w: 170, h: 64, t: "Khay 2 · động cơ phải", s: "4S 18650 · 12–16,8 V", k: "batt", layer: "motor",
+      d: ["Giống khay 1, cấp cho A4988 phải.", "4S Li-ion 12–16,8 V.",
+        "Hai khay động cơ xả không đều nhau: theo dõi cả hai, khay nào xuống ~12,8 V thì ngừng (một bánh yếu làm xe lệch, khó cân bằng)."] },
+    pack3: { x: 20, y: 560, w: 170, h: 64, t: "Khay 3 · Pi + ESP32", s: "4S 18650 · 12–16,8 V", k: "batt", layer: "logic",
+      d: ["Cực + → công tắc + cầu chì → IN+ XL4016; cực − → IN− XL4016.",
+        "Pi 4 + camera ~1,5–3 A ở 5 V, tức ~0,6–1,2 A ở 14,8 V; ESP32 ×2 + cảm biến thêm ~0,3 A.",
+        "Khay riêng nên động cơ kéo dòng không làm sụt áp đầu vào buck. Nhưng mass vẫn phải nối với miền động cơ (qua GND logic A4988) để tín hiệu STEP/DIR có chung mốc."] },
+    f1: { x: 230, y: 50, w: 110, h: 44, t: "Công tắc", s: "+ cầu chì 3 A", layer: "motor",
+      d: ["Ngay sau cực + khay 1.", "Cầu chì 3 A (ống thuỷ tinh hoặc polyfuse) + công tắc ≥ 3 A.", "Chập mạch thì cầu chì đứt thay vì cháy dây / pin. Công tắc để bật khay động cơ SAU khay logic."] },
+    f2: { x: 230, y: 240, w: 110, h: 44, t: "Công tắc", s: "+ cầu chì 3 A", layer: "motor",
+      d: ["Ngay sau cực + khay 2.", "Cầu chì 3 A + công tắc.", "Như khay 1."] },
+    f3: { x: 230, y: 570, w: 110, h: 44, t: "Công tắc", s: "+ cầu chì 3 A", layer: "logic",
+      d: ["Ngay sau cực + khay 3.", "Cầu chì 3 A + công tắc.", "Bật khay này TRƯỚC khay động cơ, tắt SAU."] },
+    a4988L: { x: 470, y: 30, w: 180, h: 84, t: "A4988 trái", s: "VMOT 12–16,8 V · 1/16 bước", k: "mod", layer: "motor",
+      d: ["VMOT/GND ← khay 1; 1A·1B·2A·2B → động cơ trái; VDD ← 3V3 ESP32; GND logic → GND ESP32; STEP 26, DIR 25, EN 27.",
+        "Vref ≈ 70 % dòng định mức động cơ; tản nhiệt bắt buộc.",
+        "Hai chân GND trên board A4988 nối chung bên trong: chân GND logic chính là điểm nối miền mass động cơ với miền logic."] },
+    a4988R: { x: 470, y: 220, w: 180, h: 84, t: "A4988 phải", s: "VMOT 12–16,8 V · 1/16 bước", k: "mod", layer: "motor",
+      d: ["VMOT/GND ← khay 2; cuộn → động cơ phải; VDD ← 3V3; GND logic → GND ESP32; STEP 19, DIR 18, EN 27 (chung).",
+        "Như A4988 trái.", "Như A4988 trái."] },
+    motorL: { x: 720, y: 42, w: 140, h: 60, t: "Step 42 trái", s: "4 dây · 2 cặp cuộn", layer: "motor",
+      d: ["1A/1B = một cuộn, 2A/2B = cuộn kia (đo thông mạch để tìm cặp).", "1,8°/bước, bánh 65 mm.",
+        "Xoắn mỗi cặp dây và đi xa dây I2C, UART, cáp camera: dòng đóng ngắt vài kHz trong dây động cơ cảm ứng sang dây tín hiệu."] },
+    motorR: { x: 720, y: 232, w: 140, h: 60, t: "Step 42 phải", s: "4 dây · 2 cặp cuộn", layer: "motor",
+      d: ["Như động cơ trái.", "", "Bánh quay ngược: đảo một cặp cuộn hoặc đổi RIGHT_MOTOR_INVERT."] },
+    xl: { x: 420, y: 555, w: 170, h: 74, t: "XL4016 · ra 5,15 V", s: "vào 8–40 V · tối đa 8 A", k: "mod", layer: "logic",
+      d: ["IN ← khay 3 (sau cầu chì); OUT → Pi, ESP32 #1 (+ HC-SR04), ESP32 #2, mỗi nơi một cặp dây riêng từ cọc ra (hình sao).",
+        "Chỉnh biến trở ra 5,15 V khi CHƯA nối Pi; nối Pi rồi đo lại tại chân Pi (5,0–5,2 V). Trên ~5 A cần tản nhiệt / quạt.",
+        "XL4016 không cách ly: IN− và OUT− nối chung, nên mass logic = cực − khay 3. Tụ có sẵn trên module vẫn giữ, thêm tụ ở đầu dây phía tải."] },
+    pi: { x: 880, y: 562, w: 240, h: 100, t: "Raspberry Pi 4", s: "5 V chân 2/4 · GND chân 6", k: "mod", layer: "logic",
+      d: ["5 V → chân 2/4, GND → chân 6 (hoặc qua USB-C, không cả hai). UART: chân 8 TXD, 10 RXD, 14 GND với ESP32.",
+        "Cần 5,1 V / 3 A. Dưới 4,75 V Pi báo thiếu áp, CPU bị hạ xung và có thể hỏng thẻ nhớ.",
+        "Dây 5 V + GND đi đôi, xoắn, ≥ 0,75 mm², ≤ 30 cm: dây mảnh dài sụt vài trăm mV khi Pi tăng tải."] },
+    esp1: { x: 660, y: 340, w: 200, h: 110, t: "ESP32 #1 · cân bằng", s: "VIN 5 V · 3V3 ra cảm biến", k: "mod", layer: "logic",
+      d: ["VIN ← 5 V nhánh riêng; GND ← XL4016 OUT−; 3V3 → GY-521 + VDD hai A4988.",
+        "Board DevKit hạ 5 V → 3,3 V bằng AMS1117 (~800 mA).",
+        "Không lấy nguồn ESP32 từ chân 5 V của Pi: Pi sụt áp là ESP32 khởi động lại (brownout) và xe ngã."] },
+    hc: { x: 920, y: 330, w: 200, h: 60, t: "HC-SR04 ×3", s: "VCC 5 V · TRIG / ECHO", k: "mod", layer: "logic",
+      d: ["VCC ← nhánh 5 V của ESP32; GND chung; TRIG 32/33/4; ECHO 34/35/23 qua cầu chia 1 kΩ / 2 kΩ.",
+        "Mỗi cảm biến ~15 mA, đỉnh lúc phát xung. Vị trí lắp: hướng 0°, ±40°, cao 15–20 cm, ngửa ~5°.",
+        "Vị trí / góc thật: ghi vào bảng SONAR_SENSORS trong firmware, ESP32 gửi lên Pi."] },
+    gy: { x: 920, y: 440, w: 200, h: 50, t: "GY-521 (MPU-6050)", s: "VCC ← 3V3 · I2C", k: "mod", layer: "logic",
+      d: ["VCC ← 3V3 ESP32, GND, SDA → 21, SCL → 22, AD0 → GND.",
+        "Module có LDO và trở kéo lên I2C sẵn: không thêm trở.",
+        "Đặt gần trục bánh, bắt chặt; dây ngắn, xa dây động cơ (I2C 400 kHz dễ nhiễu)."] },
+    esp2: { x: 660, y: 680, w: 200, h: 60, t: "ESP32 #2 · mic", s: "VIN 5 V · WiFi → Pi :8765", k: "mod", layer: "logic",
+      d: ["VIN ← 5 V nhánh riêng từ XL4016 (hoặc sạc dự phòng USB nếu đặt xa xe); 3V3 → INMP441.",
+        "WiFi phát kéo đỉnh 300–500 mA.",
+        "Thiếu tụ ở 3V3 thì ESP32 tự khởi động lại khi phát WiFi (brownout), âm thanh bị ngắt quãng."] },
+    inmp: { x: 1000, y: 700, w: 140, h: 44, t: "INMP441", s: "3V3 · I2S", k: "mod", layer: "logic",
+      d: ["VDD ← 3V3 ESP32 #2, GND, SCK → 26, WS → 25, SD → 33, L/R → GND.", "Không cấp 5 V.", "Dây I2S ≤ 10 cm; đặt mic xa động cơ."] },
+  };
+
+  const WIRE = [
+    { id: "m1p", c: "motor", pts: [[190, 62], [470, 62]], lbl: "+ khay 1 → VMOT", d: ["+ khay 1 → công tắc + cầu chì → VMOT A4988 trái.", "Dây ≥ 0,5 mm² (20 AWG), càng ngắn càng tốt.", "Dòng động cơ đóng ngắt liên tục: dây dài = điện cảm lớn = gai điện áp lớn."] },
+    { id: "m1g", c: "gndm", pts: [[190, 100], [470, 100]], lbl: "− khay 1 → GND A4988", d: ["Cực − khay 1 → chân GND cạnh VMOT của A4988 trái, dây riêng.", "Cùng cỡ dây với dây +.", "Dòng động cơ về thẳng pin, không chạy qua dây mass của ESP32 / Pi."] },
+    { id: "m2p", c: "motor", pts: [[190, 252], [470, 252]], lbl: "+ khay 2 → VMOT", d: ["+ khay 2 → công tắc + cầu chì → VMOT A4988 phải.", "Dây ≥ 0,5 mm².", "Như khay 1."] },
+    { id: "m2g", c: "gndm", pts: [[190, 290], [470, 290]], lbl: "− khay 2 → GND A4988", d: ["Cực − khay 2 → GND (phía VMOT) A4988 phải.", "", "Như khay 1."] },
+    { id: "c1", c: "coil", pts: [[650, 72], [720, 72]], lbl: "1A·1B / 2A·2B", d: ["A4988 trái → động cơ trái: 1A·1B một cuộn, 2A·2B cuộn kia.", "Xoắn từng cặp.", "Đi xa dây tín hiệu."] },
+    { id: "c2", c: "coil", pts: [[650, 262], [720, 262]], lbl: "1A·1B / 2A·2B", d: ["A4988 phải → động cơ phải.", "Xoắn từng cặp.", "Đi xa dây tín hiệu."] },
+    { id: "lg", c: "gnd", layer: "gnd", pts: [[650, 104], [685, 104], [685, 340]], lbl: "GND logic A4988 ↔ ESP32",
+      d: ["Chân GND cạnh VDD của mỗi A4988 → GND ESP32 (hai dây nhập một).",
+        "Dây thường, đi cạnh dây STEP/DIR/EN.",
+        "Đây là chỗ DUY NHẤT miền mass động cơ gặp miền mass logic. Không nối thêm dây giữa cực − khay động cơ và cực − khay 3: hai đường song song tạo vòng mass, dòng động cơ sẽ chia sang dây logic."] },
+    { id: "lg2", c: "gnd", layer: "gnd", pts: [[650, 294], [685, 294]], lbl: "GND logic A4988 phải", d: ["GND logic A4988 phải nhập vào cùng dây về GND ESP32.", "", "Như trên."] },
+    { id: "step", c: "sig", pts: [[702, 340], [702, 84], [650, 84]], lbl: "STEP/DIR/EN trái", d: ["ESP32 → A4988 trái: STEP 26, DIR 25, EN 27 (chung).", "EN có trở 10 kΩ kéo lên VDD (LOW = chạy).", "Trở 100 Ω nối tiếp gần ESP32 (tuỳ chọn) làm mềm sườn xung, bớt dội trên dây dài."] },
+    { id: "step2", c: "sig", pts: [[702, 274], [650, 274]], lbl: "STEP/DIR/EN phải", d: ["ESP32 → A4988 phải: STEP 19, DIR 18, EN 27.", "", "Như trên."] },
+    { id: "xin", c: "batt", layer: "logic", pts: [[190, 582], [420, 582]], lbl: "+ khay 3 → XL4016 IN+", d: ["+ khay 3 → công tắc + cầu chì → IN+ XL4016.", "Dây ≥ 0,5 mm².", ""] },
+    { id: "xgnd", c: "gnd", layer: "gnd", pts: [[190, 612], [420, 612]], lbl: "− khay 3 → XL4016 IN−", d: ["Cực − khay 3 → IN− XL4016.", "", "IN− và OUT− của XL4016 nối chung: đây là mass logic."] },
+    { id: "v5pi", c: "v5", layer: "logic", pts: [[590, 580], [880, 580]], lbl: "5,15 V → Pi chân 2/4", d: ["Cọc OUT+ XL4016 → chân 2/4 của Pi.", "≥ 0,75 mm², ≤ 30 cm, xoắn với dây GND.", "Đo tại chân Pi khi Pi đang chạy: 5,0–5,2 V."] },
+    { id: "gpi", c: "gnd", layer: "gnd", pts: [[590, 606], [880, 606]], lbl: "OUT− → Pi chân 6", d: ["Cọc OUT− XL4016 → chân 6 (GND) của Pi.", "", "Đi đôi với dây 5 V."] },
+    { id: "v5bus", c: "v5", layer: "logic", pts: [[640, 580], [640, 312], [1020, 312], [1020, 330]], lbl: "5 V nhánh ESP32 #1 + HC-SR04", d: ["Cặp dây riêng từ cọc ra XL4016 → VIN ESP32 #1 và VCC ba HC-SR04.", "", "Đi hình sao từ cọc ra buck, không lấy nối tiếp qua chân 5 V của Pi."] },
+    { id: "v5e1", c: "v5", layer: "logic", pts: [[640, 420], [660, 420]], lbl: "→ VIN", d: ["Nhánh 5 V → VIN ESP32 #1.", "", ""] },
+    { id: "ge1", c: "gnd", layer: "gnd", pts: [[620, 606], [620, 436], [660, 436]], lbl: "OUT− → GND ESP32 #1", d: ["Cọc OUT− XL4016 → GND ESP32 #1, chạy cạnh dây 5 V.", "", ""] },
+    { id: "v5e2", c: "v5", layer: "logic", pts: [[640, 580], [640, 700], [660, 700]], lbl: "5 V → ESP32 #2", d: ["Nhánh 5 V riêng → VIN ESP32 #2.", "", "Hoặc dùng sạc dự phòng USB riêng nếu ESP32 #2 đặt xa xe."] },
+    { id: "ge2", c: "gnd", layer: "gnd", pts: [[620, 606], [620, 720], [660, 720]], lbl: "OUT− → GND ESP32 #2", d: ["Cọc OUT− → GND ESP32 #2.", "", ""] },
+    { id: "shc", c: "sig", pts: [[860, 360], [920, 360]], lbl: "TRIG / ECHO", d: ["TRIG 32 / 33 / 4 nối thẳng; ECHO 34 / 35 / 23 qua cầu chia 1 kΩ + 2 kΩ.", "Chân 34, 35 chỉ vào (không kéo lên trong), hợp với ECHO.", "ECHO 5 V vào thẳng ESP32 sẽ hỏng chân dần."] },
+    { id: "si2c", c: "sig", pts: [[860, 430], [890, 430], [890, 465], [920, 465]], lbl: "I2C 21/22 + 3V3", d: ["SDA 21, SCL 22, 3V3 → VCC, GND; AD0 → GND.", "≤ 15 cm, xoắn với GND.", ""] },
+    { id: "suart", c: "sig", pts: [[840, 450], [840, 530], [930, 530], [930, 562]], lbl: "UART + GND", d: ["ESP32 TX0 (GPIO1) → 1 kΩ → Pi chân 10; Pi chân 8 → 1 kΩ → ESP32 RX0 (GPIO3); GND ESP32 ↔ Pi chân 14.",
+      "460800 baud, 3,3 V cả hai phía (không cần chuyển mức).", "Dây GND chạy cùng bó với TX/RX, xoắn: dòng hồi của tín hiệu đi sát tín hiệu, ít nhiễu."] },
+    { id: "si2s", c: "sig", pts: [[860, 712], [930, 712], [930, 722], [1000, 722]], lbl: "I2S 26/25/33", d: ["SCK → 26, WS → 25, SD → 33, L/R → GND.", "", "Dây ≤ 10 cm."] },
+  ];
+
+  const PART = [
+    { id: "tvs1", x: 340, y: 4, w: 130, h: 28, t: "TVS + 470 µF", at: [405, 62],
+      d: ["Giữa + và − ngay sau công tắc + cầu chì khay 1.", "Tụ 470 µF / 35 V + diode TVS SMBJ20A (vạch cathode về +).",
+        "Xe cân bằng hãm liên tục: động cơ bước đẩy điện ngược về VMOT. Tụ hấp thụ, TVS kẹp gai trước khi vượt 35 V (giới hạn A4988)."] },
+    { id: "cA1", x: 500, y: 2, w: 150, h: 26, t: "100 µF + 100 nF", at: [560, 30],
+      d: ["Chân VMOT–GND của A4988 trái, sát board (chân tụ ≤ 1 cm).", "100 µF / 35 V điện phân low-ESR + 100 nF gốm song song.",
+        "Bắt buộc (Pololu: tối thiểu 47 µF). Thiếu tụ này, gai LC khi cắm / chạy có thể cháy A4988 ngay."] },
+    { id: "tvs2", x: 340, y: 194, w: 130, h: 28, t: "TVS + 470 µF", at: [405, 252],
+      d: ["Sau công tắc + cầu chì khay 2.", "470 µF / 35 V + SMBJ20A.", "Như khay 1."] },
+    { id: "cA2", x: 500, y: 192, w: 150, h: 26, t: "100 µF + 100 nF", at: [560, 220],
+      d: ["VMOT–GND A4988 phải, sát board.", "100 µF / 35 V + 100 nF.", "Bắt buộc."] },
+    { id: "cA4vdd", x: 708, y: 120, w: 96, h: 22, t: "100 Ω ×5", at: [702, 140],
+      d: ["Nối tiếp trên STEP, DIR (hai driver) và EN, đặt gần chân ESP32. Thêm tụ 100 nF ở VDD–GND logic mỗi A4988.", "Trở 100 Ω (tuỳ chọn) · tụ 100 nF.",
+        "Trở làm mềm sườn xung, bớt dội và bớt nhiễu phát ra trên dây dài. Tụ lọc nguồn logic của driver."] },
+    { id: "cXin", x: 330, y: 640, w: 150, h: 26, t: "220 µF + 100 nF", at: [395, 612],
+      d: ["Đầu vào XL4016 (cọc IN+ / IN−).", "220 µF / 35 V + 100 nF.", "Buck kéo dòng theo xung; tụ giữ đầu vào ổn định, nhất là khi pin đã vơi."] },
+    { id: "cPi", x: 880, y: 668, w: 200, h: 26, t: "1000 µF + 100 nF", at: [980, 662],
+      d: ["Chân 5 V (2/4) – GND (6) của Pi, ở đầu dây phía Pi.", "1000 µF / 16 V + 100 nF.",
+        "Pi tăng tải đột ngột (camera, SLAM, WiFi) và dây có điện trở: tụ giữ áp trong lúc buck chưa kịp bù."] },
+    { id: "cVin", x: 660, y: 454, w: 98, h: 24, t: "VIN 100µ+100n", at: [700, 450],
+      d: ["Chân VIN–GND ESP32 #1.", "100 µF / 16 V + 100 nF.", "Ổn định đầu vào AMS1117 trên board."] },
+    { id: "c3v3", x: 762, y: 454, w: 98, h: 24, t: "3V3 10µ+100n", at: [810, 450],
+      d: ["Chân 3V3–GND ESP32 #1.", "10 µF + 100 nF.", "Chống brownout reset (ESP32 khởi động lại giữa chừng = xe ngã)."] },
+    { id: "cHc", x: 920, y: 394, w: 200, h: 24, t: "mỗi cái 47 µF + 100 nF", at: [1020, 390],
+      d: ["VCC–GND ngay trên mỗi HC-SR04.", "47 µF / 16 V + 100 nF, ×3.", "Mỗi lần phát xung cảm biến kéo dòng đỉnh, làm gợn nhánh 5 V chung với ESP32."] },
+    { id: "rDiv", x: 866, y: 338, w: 50, h: 18, t: "1k/2k", at: [891, 360],
+      d: ["Trên dây ECHO mỗi HC-SR04: ECHO → 1 kΩ → [điểm giữa → GPIO] → 2 kΩ → GND.", "1 kΩ + 2 kΩ (hoặc 2,2 kΩ), ×3.", "Hạ 5 V xuống ~3,3 V cho chân ESP32."] },
+    { id: "cGy", x: 920, y: 494, w: 200, h: 24, t: "10µ + 100n · không thêm trở", at: [1020, 490],
+      d: ["VCC–GND sát GY-521.", "10 µF + 100 nF. Không lắp thêm trở kéo lên (module có sẵn).", "Nguồn IMU sạch thì gyro / gia tốc ít nhiễu."] },
+    { id: "rUart", x: 846, y: 504, w: 72, h: 22, t: "1 kΩ ×2", at: [840, 515],
+      d: ["Nối tiếp trên mỗi dây UART (TX→RX), đặt gần ESP32.", "1 kΩ ×2 (470 Ω–1 kΩ đều được).",
+        "Một bên chưa có điện / mass lệch: trở hạn dòng chảy qua diode bảo vệ của chân, tránh nuôi ngược ESP32 qua chân TX của Pi."] },
+    { id: "cMic", x: 660, y: 744, w: 200, h: 22, t: "VIN 100µ · 3V3 220µ+100n", at: [760, 740],
+      d: ["VIN–GND và 3V3–GND ESP32 #2.", "100 µF ở VIN; 220 µF / 10 V + 100 nF ở 3V3.", "WiFi kéo đỉnh 300–500 mA."] },
+    { id: "cInmp", x: 1000, y: 748, w: 140, h: 22, t: "10 µF + 100 nF", at: [1070, 744],
+      d: ["VDD–GND sát INMP441.", "10 µF + 100 nF.", "Bớt ù / rè do nguồn trong âm thanh thu được."] },
+  ];
+
+  const LAYERS = [["all", "Tất cả"], ["motor", "Nguồn động cơ"], ["logic", "Nguồn 5 V logic"], ["gnd", "Mass"], ["sig", "Tín hiệu"], ["part", "Tụ & trở"]];
+  const layerOfWire = (w) => w.layer || ({ motor: "motor", gndm: "gnd", coil: "motor", sig: "sig", v5: "logic", batt: "logic", gnd: "gnd" })[w.c];
+
+  const gW = el("g", {}, svg), gB = el("g", {}, svg), gP = el("g", {}, svg), gL = el("g", {}, svg);
+  const items = {};
+  const pathD = (pts) => "M" + pts.map((p) => p.join(",")).join(" L");
+
+  WIRE.forEach((w) => {
+    const g = el("g", { class: "w " + w.c, "data-layer": layerOfWire(w), tabindex: "0", role: "button", "aria-label": w.lbl }, gW);
+    const d = pathD(w.pts);
+    el("path", { class: "h", d }, g);
+    const ln = el("path", { class: "l", d }, g);
+    const lb = el("g", { class: "wl" }, gL);
+    items["w:" + w.id] = { g, data: w, kind: "w", lb, ln };
+  });
+  Object.entries(BOX).forEach(([id, b]) => {
+    const g = el("g", { class: "wbox " + (b.k || ""), "data-layer": b.layer, tabindex: "0", role: "button", "aria-label": b.t }, gB);
+    el("rect", { class: "b", x: b.x, y: b.y, width: b.w, height: b.h, rx: b.k === "batt" ? 4 : 6 }, g);
+    el("text", { class: "t", x: b.x + 10, y: b.y + 22 }, g).textContent = b.t;
+    el("text", { class: "s", x: b.x + 10, y: b.y + 40 }, g).textContent = b.s;
+    items["b:" + id] = { g, data: b, kind: "b" };
+  });
+  PART.forEach((p) => {
+    const g = el("g", { class: "wb", "data-layer": "part", tabindex: "0", role: "button", "aria-label": p.t }, gP);
+    const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+    const ty = Math.abs(p.at[1] - p.y) < Math.abs(p.at[1] - (p.y + p.h)) ? p.y : p.y + p.h;
+    if (Math.hypot(p.at[0] - cx, p.at[1] - ty) > 6) el("line", { x1: Math.min(Math.max(p.at[0], p.x + 6), p.x + p.w - 6), y1: ty, x2: p.at[0], y2: p.at[1] }, g);
+    el("rect", { x: p.x, y: p.y, width: p.w, height: p.h, rx: 4 }, g);
+    el("text", { x: cx, y: cy + 3.8, "text-anchor": "middle" }, g).textContent = p.t;
+    items["p:" + p.id] = { g, data: p, kind: "p" };
+  });
+  // ghi chú mass
+  {
+    const g = el("g", { class: "note", "data-layer": "gnd" }, gP);
+    el("rect", { x: 20, y: 676, width: 300, height: 92, rx: 6 }, g);
+    ["Hai miền mass (động cơ / logic) gặp nhau", "ĐÚNG MỘT CHỖ: chân GND logic của A4988.", "Không nối thêm dây giữa cực − các khay.",
+      "Dòng động cơ về thẳng pin bằng dây to riêng."].forEach((s, i) => { el("text", { x: 32, y: 698 + i * 18 }, g).textContent = s; });
+  }
+
+  function placeLabels() {
+    Object.values(items).filter((it) => it.kind === "w").forEach((it) => {
+      it.lb.textContent = "";
+      const L = it.ln.getTotalLength(), p = it.ln.getPointAtLength(L / 2);
+      const r = el("rect", { y: p.y - 18, height: 15, rx: 3 }, it.lb);
+      const t = el("text", { x: p.x, y: p.y - 7, "text-anchor": "middle" }, it.lb);
+      t.textContent = it.data.lbl;
+      let bw = it.data.lbl.length * 6.1 + 10;
+      try { bw = t.getComputedTextLength() + 10; } catch (_) {}
+      r.setAttribute("x", p.x - bw / 2); r.setAttribute("width", bw);
+    });
+  }
+  placeLabels();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(placeLabels);
+
+  // ---- tương tác
+  let layer = "all", sel = null;
+  const segEl = document.getElementById("wlayers");
+  LAYERS.forEach(([id, name]) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.dataset.l = id; b.textContent = name;
+    b.addEventListener("click", () => { layer = id; sel = null; render(); });
+    segEl.appendChild(b);
+  });
+  Object.entries(items).forEach(([key, it]) => {
+    it.g.addEventListener("click", (e) => { e.stopPropagation(); sel = sel === key ? null : key; render(); });
+    it.g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sel = sel === key ? null : key; render(); } });
+    if (it.lb) {
+      it.g.addEventListener("mouseenter", () => it.lb.classList.add("on"));
+      it.g.addEventListener("mouseleave", () => { if (sel !== key) it.lb.classList.remove("on"); });
+    }
+  });
+  svg.addEventListener("click", () => { if (sel) { sel = null; render(); } });
+
+  function render() {
+    segEl.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.l === layer)));
+    svg.classList.toggle("focus", layer !== "all");
+    svg.querySelectorAll("[data-layer]").forEach((n) => n.classList.toggle("on", n.dataset.layer === layer));
+    Object.entries(items).forEach(([key, it]) => {
+      it.g.classList.toggle("sel", key === sel);
+      if (it.lb) it.lb.classList.toggle("on", key === sel || (layer !== "all" && layerOfWire(it.data) === layer));
+    });
+    sel ? panelItem(items[sel]) : panelIntro();
+  }
+
+  function panelIntro() {
+    const L = LAYERS.find((x) => x[0] === layer);
+    const txt = {
+      all: "Mỗi khay pin một việc; mass hai miền chỉ gặp nhau ở chân GND logic của A4988. Nhãn tím là tụ / trở cần lắp thêm.",
+      motor: "Dòng lớn, đóng ngắt liên tục: dây to, ngắn, mỗi khay một A4988. Tụ 100 µF sát VMOT là bắt buộc; tụ 470 µF + TVS ở đầu khay hấp thụ điện ngược khi hãm.",
+      logic: "Khay 3 → XL4016 5,15 V → mỗi tải một cặp dây riêng từ cọc ra (hình sao). Tụ lớn đặt ở đầu dây phía tải, không chỉ ở buck.",
+      gnd: "Dòng động cơ về thẳng pin bằng dây to. Mass logic (Pi, ESP32, cảm biến) nối với miền động cơ đúng một chỗ: chân GND logic A4988. Không nối thêm dây giữa các cực −.",
+      sig: "Tín hiệu đều 3,3 V. ECHO 5 V phải qua cầu chia. Dây UART có trở 1 kΩ và dây GND đi kèm; I2C và I2S ngắn, xa dây động cơ.",
+      part: "15 vị trí tụ / trở. Bấm từng nhãn để xem giá trị, chỗ lắp và lý do; danh sách mua đủ ở bảng bên dưới.",
+    }[layer];
+    panel.innerHTML = `<div class="eyebrow">Lắp mạch</div><h2>${esc(L[1])}</h2><p>${esc(txt)}</p>
+      <p class="hint" style="color:var(--muted);font-size:13px;margin:0">Bấm một khay, module, dây hoặc nhãn tím để xem chi tiết. Lọc theo lớp ở thanh phía trên.</p>`;
+  }
+  function panelItem(it) {
+    const d = it.data.d || ["", "", ""];
+    const title = it.kind === "w" ? it.data.lbl : it.data.t;
+    const kind = { w: "Dây", b: "Khay / module", p: "Tụ / trở cần lắp" }[it.kind];
+    const rows = [["Nối / lắp ở", d[0]], [it.kind === "p" ? "Giá trị" : "Thông số", d[1]], ["Vì sao", d[2]]].filter((r) => r[1]);
+    panel.innerHTML = `<button class="back" type="button" id="wback">← tổng quan</button>
+      <div class="eyebrow">${esc(kind)}</div><h2>${esc(title)}</h2>
+      <dl class="wd">${rows.map((r) => `<dt>${esc(r[0])}</dt><dd>${esc(r[1])}</dd>`).join("")}</dl>`;
+    panel.querySelector("#wback").addEventListener("click", () => { sel = null; render(); });
+  }
+  render();
+
+  // ---- sơ đồ chân A4988 (thẻ bên dưới)
+  const ap = document.getElementById("a4p");
+  if (ap) {
+    const left = [["ENABLE", "GPIO27 (10k lên VDD)"], ["MS1", "→ VDD"], ["MS2", "→ VDD"], ["MS3", "→ VDD (1/16)"],
+      ["RESET", "nối với SLEEP"], ["SLEEP", "nối với RESET"], ["STEP", "GPIO26 trái/19 phải"], ["DIR", "GPIO25 trái/18 phải"]];
+    const right = [["VMOT", "+ khay (100 µF+100 nF)", "wp"], ["GND", "− khay (dây to)", "wg"], ["2B", "cuộn 2", "wp"], ["2A", "cuộn 2", "wp"],
+      ["1A", "cuộn 1", "wp"], ["1B", "cuộn 1", "wp"], ["VDD", "3V3 ESP32 (+100 nF)", "wr"], ["GND", "GND ESP32", "wg"]];
+    left.forEach(([p, c], i) => {
+      const y = 34 + i * 25;
+      el("rect", { class: "pin", x: 168, y: y - 6, width: 12, height: 12, rx: 2 }, ap);
+      el("text", { x: 184, y: y + 4 }, ap).textContent = p;
+      el("path", { class: "wr", d: `M168 ${y} H130` }, ap);
+      el("text", { x: 126, y: y + 4, "text-anchor": "end", class: "lbl2" }, ap).textContent = c;
+    });
+    right.forEach(([p, c, cls], i) => {
+      const y = 34 + i * 25;
+      el("rect", { class: "pin", x: 300, y: y - 6, width: 12, height: 12, rx: 2 }, ap);
+      el("text", { x: 296, y: y + 4, "text-anchor": "end" }, ap).textContent = p;
+      el("path", { class: cls, d: `M312 ${y} H336` }, ap);
+      el("text", { x: 340, y: y + 4, class: "lbl2" }, ap).textContent = c;
+    });
+    el("path", { class: "wr", d: "M162 134 V159 M162 134 H168 M162 159 H168" }, ap);
+  }
+})();
+</script>
+</body>
+</html>
